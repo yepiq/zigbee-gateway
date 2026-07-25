@@ -69,7 +69,7 @@ esphome:
   name_add_mac_suffix: false
   project:
     name: yepiq.Zigbee_Gateway
-    version: '1.95b'
+    version: '1.96b'
 
 esp32:
   board: esp32dev
@@ -116,11 +116,27 @@ zigbee_gateway:
   socket_connected:
     name: Socket Status
     id: socket_status
-    entity_category: ''
+    entity_category: diagnostic
   connection_count:
     name: Socket Connections
     id: socket_connections
-    entity_category: ''
+    entity_category: diagnostic
+  transport_state:
+    name: Zigbee TCP State
+  pending_socket:
+    name: Zigbee TCP Pending Socket
+  parked_socket:
+    name: Zigbee TCP Parked Socket
+  last_transport_event:
+    name: Zigbee TCP Last Event
+  rejected_connections:
+    name: Zigbee TCP Rejected Connections
+  pending_timeouts:
+    name: Zigbee TCP Pending Timeouts
+  maintenance_sessions:
+    name: Zigbee TCP Maintenance Sessions
+  recovery_resets:
+    name: Zigbee TCP Recovery Resets
 
   reset_pin:
     number: ${zRST_pin}

@@ -9,6 +9,7 @@
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/socket/socket.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 
 #include "zigbee_serial.h"
 #include "zigbee_tcp_state.h"
@@ -39,6 +40,14 @@ class ZigbeeTcpServer {
   void set_park_timeout(uint32_t timeout_ms) { this->park_timeout_ms_ = timeout_ms; }
   void set_connected_sensor(binary_sensor::BinarySensor *sensor) { this->connected_sensor_ = sensor; }
   void set_connection_count_sensor(sensor::Sensor *sensor) { this->connection_count_sensor_ = sensor; }
+  void set_transport_state_sensor(text_sensor::TextSensor *sensor) { this->transport_state_sensor_ = sensor; }
+  void set_pending_socket_sensor(binary_sensor::BinarySensor *sensor) { this->pending_socket_sensor_ = sensor; }
+  void set_parked_socket_sensor(binary_sensor::BinarySensor *sensor) { this->parked_socket_sensor_ = sensor; }
+  void set_last_event_sensor(text_sensor::TextSensor *sensor) { this->last_event_sensor_ = sensor; }
+  void set_rejected_connections_sensor(sensor::Sensor *sensor) { this->rejected_connections_sensor_ = sensor; }
+  void set_pending_timeouts_sensor(sensor::Sensor *sensor) { this->pending_timeouts_sensor_ = sensor; }
+  void set_maintenance_sessions_sensor(sensor::Sensor *sensor) { this->maintenance_sessions_sensor_ = sensor; }
+  void set_recovery_resets_sensor(sensor::Sensor *sensor) { this->recovery_resets_sensor_ = sensor; }
 
   bool start();
   void loop();
@@ -122,7 +131,16 @@ class ZigbeeTcpServer {
 
   binary_sensor::BinarySensor *connected_sensor_{nullptr};
   sensor::Sensor *connection_count_sensor_{nullptr};
+  text_sensor::TextSensor *transport_state_sensor_{nullptr};
+  binary_sensor::BinarySensor *pending_socket_sensor_{nullptr};
+  binary_sensor::BinarySensor *parked_socket_sensor_{nullptr};
+  text_sensor::TextSensor *last_event_sensor_{nullptr};
+  sensor::Sensor *rejected_connections_sensor_{nullptr};
+  sensor::Sensor *pending_timeouts_sensor_{nullptr};
+  sensor::Sensor *maintenance_sessions_sensor_{nullptr};
+  sensor::Sensor *recovery_resets_sensor_{nullptr};
   size_t last_published_connection_count_{static_cast<size_t>(-1)};
+  uint32_t last_published_state_revision_{static_cast<uint32_t>(-1)};
 };
 
 }  // namespace zigbee_gateway

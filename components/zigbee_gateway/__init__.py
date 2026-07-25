@@ -13,6 +13,7 @@ from esphome.const import (
     ENTITY_CATEGORY_DIAGNOSTIC,
     ICON_RESTART,
     STATE_CLASS_MEASUREMENT,
+    STATE_CLASS_TOTAL_INCREASING,
     UNIT_BYTES,
     UNIT_DECIBEL_MILLIWATT,
 )
@@ -23,6 +24,14 @@ AUTO_LOAD = ["binary_sensor", "button", "sensor", "socket", "text_sensor"]
 
 CONF_SOCKET_CONNECTED = "socket_connected"
 CONF_CONNECTION_COUNT = "connection_count"
+CONF_TRANSPORT_STATE = "transport_state"
+CONF_PENDING_SOCKET = "pending_socket"
+CONF_PARKED_SOCKET = "parked_socket"
+CONF_LAST_TRANSPORT_EVENT = "last_transport_event"
+CONF_REJECTED_CONNECTIONS = "rejected_connections"
+CONF_PENDING_TIMEOUTS = "pending_timeouts"
+CONF_MAINTENANCE_SESSIONS = "maintenance_sessions"
+CONF_RECOVERY_RESETS = "recovery_resets"
 CONF_BSL_PIN = "bsl_pin"
 CONF_IP_ADDRESS = "ip_address"
 CONF_TCP_PORT = "tcp_port"
@@ -98,6 +107,46 @@ CONFIG_SCHEMA = cv.All(
                 state_class=STATE_CLASS_MEASUREMENT,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:counter",
+            ),
+            cv.Required(CONF_TRANSPORT_STATE): text_sensor.text_sensor_schema(
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:serial-port",
+            ),
+            cv.Required(CONF_PENDING_SOCKET): binary_sensor.binary_sensor_schema(
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:timer-sand",
+            ),
+            cv.Required(CONF_PARKED_SOCKET): binary_sensor.binary_sensor_schema(
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:pause-circle-outline",
+            ),
+            cv.Required(CONF_LAST_TRANSPORT_EVENT): text_sensor.text_sensor_schema(
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:timeline-text-outline",
+            ),
+            cv.Required(CONF_REJECTED_CONNECTIONS): sensor.sensor_schema(
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_TOTAL_INCREASING,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:lan-disconnect",
+            ),
+            cv.Required(CONF_PENDING_TIMEOUTS): sensor.sensor_schema(
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_TOTAL_INCREASING,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:timer-alert-outline",
+            ),
+            cv.Required(CONF_MAINTENANCE_SESSIONS): sensor.sensor_schema(
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_TOTAL_INCREASING,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:tools",
+            ),
+            cv.Required(CONF_RECOVERY_RESETS): sensor.sensor_schema(
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_TOTAL_INCREASING,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:backup-restore",
             ),
             cv.Optional(CONF_IP_ADDRESS): cv.use_id(text_sensor.TextSensor),
             cv.Optional(CONF_TCP_PORT, default=6638): cv.port,
@@ -213,6 +262,10 @@ async def to_code(config):
     cg.add(var.set_socket_connected_binary_sensor(socket_connected))
     connection_count = await sensor.new_sensor(config[CONF_CONNECTION_COUNT])
     cg.add(var.set_connection_count_sensor(connection_count))
+    pending_socket = await binary_sensor.new_binary_sensor(config[CONF_PENDING_SOCKET])
+    cg.add(var.set_pending_socket_binary_sensor(pending_socket))
+    parked_socket = await binary_sensor.new_binary_sensor(config[CONF_PARKED_SOCKET])
+    cg.add(var.set_parked_socket_binary_sensor(parked_socket))
     if CONF_IP_ADDRESS in config:
         cg.add(
             var.set_ip_address_text_sensor(
@@ -225,6 +278,10 @@ async def to_code(config):
         CONF_TX_POWER: "set_tx_power_sensor",
         CONF_PAN_ID: "set_pan_id_sensor",
         CONF_CHANNEL: "set_channel_sensor",
+        CONF_REJECTED_CONNECTIONS: "set_rejected_connections_sensor",
+        CONF_PENDING_TIMEOUTS: "set_pending_timeouts_sensor",
+        CONF_MAINTENANCE_SESSIONS: "set_maintenance_sessions_sensor",
+        CONF_RECOVERY_RESETS: "set_recovery_resets_sensor",
     }
     for key, setter in sensor_setters.items():
         sens = await sensor.new_sensor(config[key])
@@ -242,6 +299,8 @@ async def to_code(config):
         CONF_EXTENDED_PAN_ID: "set_ext_pan_id_text_sensor",
         CONF_HARDWARE: "set_hardware_text_sensor",
         CONF_METADATA_STATUS: "set_metadata_status_text_sensor",
+        CONF_TRANSPORT_STATE: "set_transport_state_text_sensor",
+        CONF_LAST_TRANSPORT_EVENT: "set_last_transport_event_text_sensor",
     }
     for key, setter in text_sensor_setters.items():
         sens = await text_sensor.new_text_sensor(config[key])

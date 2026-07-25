@@ -79,7 +79,7 @@ void ZigbeeTcpServer::loop() {
   if (this->pending_.connected() && !this->collect_prebuffer_(this->pending_)) {
     ESP_LOGD(TCP_TAG, "Pending client %s disconnected", this->pending_.identifier.c_str());
     this->close_client_(this->pending_, false);
-    this->state_.close_pending();
+    this->state_.disconnect_pending();
   }
 
   if (this->active_.connected() && this->state_.active() == ZigbeeTcpActiveState::PROVISIONAL) {
@@ -102,13 +102,15 @@ void ZigbeeTcpServer::loop() {
     ESP_LOGW(TCP_TAG, "Pending client %s timed out after %u ms", this->pending_.identifier.c_str(),
              static_cast<unsigned>(this->pending_timeout_ms_));
     this->close_client_(this->pending_, true);
-    this->state_.close_pending();
+    this->state_.timeout_pending();
   }
   if (this->state_.bsl_armed() && now - this->bsl_armed_at_ >= this->pending_timeout_ms_) {
     ESP_LOGW(TCP_TAG, "BSL rendezvous timed out after %u ms", static_cast<unsigned>(this->pending_timeout_ms_));
     const bool radio_was_in_bsl = this->state_.expire_bsl_rendezvous();
-    if (radio_was_in_bsl && this->parent_ != nullptr)
+    if (radio_was_in_bsl && this->parent_ != nullptr) {
       this->parent_->reset_for_remote_();
+      this->state_.record_recovery_reset();
+    }
     if (radio_was_in_bsl && this->parent_ != nullptr)
       this->parent_->on_tcp_maintenance_finished_();
   }
@@ -116,7 +118,7 @@ void ZigbeeTcpServer::loop() {
     ESP_LOGW(TCP_TAG, "Parked client %s reached the %u ms safety limit; closing it",
              this->parked_.identifier.c_str(), static_cast<unsigned>(this->park_timeout_ms_));
     this->close_client_(this->parked_, true);
-    this->state_.close_parked();
+    this->state_.timeout_parked();
   }
 
   this->publish_sensors_();
@@ -384,14 +386,14 @@ void ZigbeeTcpServer::drain_parked_() {
       ESP_LOGI(TCP_TAG, "Parked client %s disconnected after %u discarded bytes",
                this->parked_.identifier.c_str(), static_cast<unsigned>(this->parked_.bytes_discarded));
       this->close_client_(this->parked_, false);
-      this->state_.close_parked();
+      this->state_.disconnect_parked();
       return;
     }
     if (errno == EWOULDBLOCK || errno == EAGAIN)
       return;
     ESP_LOGW(TCP_TAG, "Read failed for parked client %s: errno=%d", this->parked_.identifier.c_str(), errno);
     this->close_client_(this->parked_, false);
-    this->state_.close_parked();
+    this->state_.disconnect_parked();
     return;
   }
 }
@@ -532,8 +534,10 @@ void ZigbeeTcpServer::finish_maintenance_(bool recover_radio) {
   // disconnects. If a client instead exits while the radio may still be in ROM
   // BSL (including an aborted flash), perform one recovery reset here. An
   // already-running image tolerates the same reset after legacy tools.
-  if (recover_radio && this->parent_ != nullptr)
+  if (recover_radio && this->parent_ != nullptr) {
     this->parent_->reset_for_remote_();
+    this->state_.record_recovery_reset();
+  }
   if (this->parked_.connected()) {
     ESP_LOGI(TCP_TAG, "Closing parked client %s so it can restart against the post-maintenance radio",
              this->parked_.identifier.c_str());
@@ -550,13 +554,35 @@ void ZigbeeTcpServer::clear_uart_output_() {
 
 void ZigbeeTcpServer::publish_sensors_() {
   const size_t count = this->connection_count();
-  if (count == this->last_published_connection_count_)
+  if (count != this->last_published_connection_count_) {
+    this->last_published_connection_count_ = count;
+    if (this->connected_sensor_ != nullptr)
+      this->connected_sensor_->publish_state(count > 0);
+    if (this->connection_count_sensor_ != nullptr)
+      this->connection_count_sensor_->publish_state(static_cast<float>(count));
+  }
+
+  if (this->state_.revision() == this->last_published_state_revision_)
     return;
-  this->last_published_connection_count_ = count;
-  if (this->connected_sensor_ != nullptr)
-    this->connected_sensor_->publish_state(count > 0);
-  if (this->connection_count_sensor_ != nullptr)
-    this->connection_count_sensor_->publish_state(static_cast<float>(count));
+  this->last_published_state_revision_ = this->state_.revision();
+  if (this->transport_state_sensor_ != nullptr)
+    this->transport_state_sensor_->publish_state(zigbee_tcp_active_state_name(this->state_.active()));
+  if (this->pending_socket_sensor_ != nullptr)
+    this->pending_socket_sensor_->publish_state(this->state_.pending());
+  if (this->parked_socket_sensor_ != nullptr)
+    this->parked_socket_sensor_->publish_state(this->state_.parked());
+  if (this->last_event_sensor_ != nullptr)
+    this->last_event_sensor_->publish_state(zigbee_tcp_event_name(this->state_.last_event()));
+
+  const auto &counters = this->state_.counters();
+  if (this->rejected_connections_sensor_ != nullptr)
+    this->rejected_connections_sensor_->publish_state(static_cast<float>(counters.rejected_connections));
+  if (this->pending_timeouts_sensor_ != nullptr)
+    this->pending_timeouts_sensor_->publish_state(static_cast<float>(counters.pending_timeouts));
+  if (this->maintenance_sessions_sensor_ != nullptr)
+    this->maintenance_sessions_sensor_->publish_state(static_cast<float>(counters.maintenance_sessions));
+  if (this->recovery_resets_sensor_ != nullptr)
+    this->recovery_resets_sensor_->publish_state(static_cast<float>(counters.recovery_resets));
 }
 
 }  // namespace zigbee_gateway

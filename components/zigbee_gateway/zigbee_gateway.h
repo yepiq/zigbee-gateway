@@ -32,6 +32,30 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
     this->connection_count_sensor_ = sensor;
     this->tcp_server_.set_connection_count_sensor(sensor);
   }
+  void set_transport_state_text_sensor(text_sensor::TextSensor *sensor) {
+    this->tcp_server_.set_transport_state_sensor(sensor);
+  }
+  void set_pending_socket_binary_sensor(binary_sensor::BinarySensor *sensor) {
+    this->tcp_server_.set_pending_socket_sensor(sensor);
+  }
+  void set_parked_socket_binary_sensor(binary_sensor::BinarySensor *sensor) {
+    this->tcp_server_.set_parked_socket_sensor(sensor);
+  }
+  void set_last_transport_event_text_sensor(text_sensor::TextSensor *sensor) {
+    this->tcp_server_.set_last_event_sensor(sensor);
+  }
+  void set_rejected_connections_sensor(sensor::Sensor *sensor) {
+    this->tcp_server_.set_rejected_connections_sensor(sensor);
+  }
+  void set_pending_timeouts_sensor(sensor::Sensor *sensor) {
+    this->tcp_server_.set_pending_timeouts_sensor(sensor);
+  }
+  void set_maintenance_sessions_sensor(sensor::Sensor *sensor) {
+    this->tcp_server_.set_maintenance_sessions_sensor(sensor);
+  }
+  void set_recovery_resets_sensor(sensor::Sensor *sensor) {
+    this->tcp_server_.set_recovery_resets_sensor(sensor);
+  }
   void set_ip_address_text_sensor(text_sensor::TextSensor *sensor) { this->ip_address_text_sensor_ = sensor; }
 
   void set_flash_size_sensor(sensor::Sensor *sensor) { this->flash_size_sensor_ = sensor; }

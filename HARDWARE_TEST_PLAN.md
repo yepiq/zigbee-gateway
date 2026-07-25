@@ -168,6 +168,47 @@ The suite also covers the armed-owner-disconnect edge case: if the normal owner
 leaves while BSL rendezvous is armed, the next maintenance socket must trigger
 the deferred BSL entry rather than receiving an application-mode UART.
 
+## Transport diagnostics
+
+All entities in this section must appear in Home Assistant under the diagnostic
+category.
+
+### DIAG-01 — Idle and normal transport state
+
+- Status: `NOT RUN`
+- Procedure: Boot without a TCP client, then connect and disconnect
+  Zigbee2MQTT.
+- Expected: Zigbee TCP State reports `idle`, briefly `provisional`, then
+  `normal`, and returns to `idle`; Last Event follows the corresponding
+  transitions; pending and parked sockets remain off.
+
+### DIAG-02 — Pending and parked topology
+
+- Status: `NOT RUN`
+- Procedure: With Zigbee2MQTT normal, open a silent second socket, then promote
+  it into a maintenance session.
+- Expected: Pending Socket turns on while waiting, then turns off as Parked
+  Socket turns on and State becomes `maintenance`; Socket Connections matches
+  the actual active, pending, and parked socket count throughout.
+
+### DIAG-03 — Rejection, timeout, and maintenance counters
+
+- Status: `NOT RUN`
+- Procedure: Cause one third-client rejection, one pending-socket timeout, and
+  one successful maintenance takeover.
+- Expected: Rejected Connections, Pending Timeouts, and Maintenance Sessions
+  each increment exactly once. Repeating one event changes only its applicable
+  boot-scoped counter.
+
+### DIAG-04 — Recovery reset counter and last event
+
+- Status: `NOT RUN`
+- Procedure: Abort a maintenance session while the radio may still be in BSL,
+  then separately exercise a command-first BSL rendezvous timeout.
+- Expected: Recovery Resets increments only when the ESP32 actually performs
+  the recovery reset. Last Event reports `Recovery Reset` after the reset side
+  effect; metadata refresh still completes before normal UART ownership.
+
 ## Ordinary TCP transport
 
 ### TCP-01 — Normal Zigbee2MQTT session
