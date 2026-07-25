@@ -15,9 +15,10 @@ enum class ZigbeeTcpActiveState : uint8_t {
 enum class ZigbeeTcpAcceptAction : uint8_t {
   ACTIVATE_PROVISIONAL = 0,
   ACTIVATE_MAINTENANCE = 1,
-  HOLD_PENDING = 2,
-  TAKE_OVER_WITH_NEW_CLIENT = 3,
-  REJECT = 4,
+  ACTIVATE_MAINTENANCE_AND_ENTER_BSL = 2,
+  HOLD_PENDING = 3,
+  TAKE_OVER_WITH_NEW_CLIENT = 4,
+  REJECT = 5,
 };
 
 enum class ZigbeeTcpBslAction : uint8_t {
@@ -60,9 +61,12 @@ class ZigbeeTcpState {
   ZigbeeTcpAcceptAction accept_client() {
     if (this->active_ == ZigbeeTcpActiveState::IDLE) {
       if (this->bsl_armed_) {
+        const bool enter_bsl = !this->bsl_entered_;
         this->active_ = ZigbeeTcpActiveState::MAINTENANCE;
         this->bsl_armed_ = false;
-        return ZigbeeTcpAcceptAction::ACTIVATE_MAINTENANCE;
+        this->bsl_entered_ = true;
+        return enter_bsl ? ZigbeeTcpAcceptAction::ACTIVATE_MAINTENANCE_AND_ENTER_BSL
+                         : ZigbeeTcpAcceptAction::ACTIVATE_MAINTENANCE;
       }
       this->active_ = ZigbeeTcpActiveState::PROVISIONAL;
       return ZigbeeTcpAcceptAction::ACTIVATE_PROVISIONAL;

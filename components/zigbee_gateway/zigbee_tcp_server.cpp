@@ -173,6 +173,15 @@ void ZigbeeTcpServer::accept_clients_() {
         ESP_LOGI(TCP_TAG, "Maintenance client %s connected after BSL command",
                  this->active_.identifier.c_str());
         break;
+      case ZigbeeTcpAcceptAction::ACTIVATE_MAINTENANCE_AND_ENTER_BSL:
+        this->active_ = std::move(client);
+        this->serial_->set_owner(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
+        this->serial_->drain(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
+        if (this->parent_ != nullptr)
+          this->parent_->enter_bsl_for_remote_();
+        ESP_LOGI(TCP_TAG, "Maintenance client %s connected after the normal owner left; entered BSL now",
+                 this->active_.identifier.c_str());
+        break;
       case ZigbeeTcpAcceptAction::HOLD_PENDING:
         this->pending_ = std::move(client);
         ESP_LOGI(TCP_TAG, "Holding first pending client from %s for up to %u ms",

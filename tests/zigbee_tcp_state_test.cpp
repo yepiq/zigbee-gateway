@@ -78,7 +78,7 @@ static void test_armed_takeover_preserves_normal_until_flashing_socket() {
   assert_valid(state);
 }
 
-static void test_armed_owner_disconnect_current_behavior() {
+static void test_armed_owner_disconnect_enters_bsl_for_replacement() {
   ZigbeeTcpState state;
   assert(state.accept_client() == ZigbeeTcpAcceptAction::ACTIVATE_PROVISIONAL);
   assert(state.receive_active_payload());
@@ -88,12 +88,10 @@ static void test_armed_owner_disconnect_current_behavior() {
   assert(state.bsl_armed());
   assert(!state.bsl_entered());
 
-  // Behavior-preserving extraction: the old server classified this next
-  // client as maintenance without entering BSL. A separate corrective commit
-  // changes this transition and its expected assertions.
-  assert(state.accept_client() == ZigbeeTcpAcceptAction::ACTIVATE_MAINTENANCE);
+  assert(state.accept_client() ==
+         ZigbeeTcpAcceptAction::ACTIVATE_MAINTENANCE_AND_ENTER_BSL);
   assert(state.active() == ZigbeeTcpActiveState::MAINTENANCE);
-  assert(!state.bsl_entered());
+  assert(state.bsl_entered());
   assert_valid(state);
 }
 
@@ -117,7 +115,7 @@ int main() {
   test_connection_first_bsl_takeover();
   test_legacy_command_first_bsl();
   test_armed_takeover_preserves_normal_until_flashing_socket();
-  test_armed_owner_disconnect_current_behavior();
+  test_armed_owner_disconnect_enters_bsl_for_replacement();
   test_reset_and_timeouts();
   return 0;
 }

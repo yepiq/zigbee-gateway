@@ -164,10 +164,9 @@ The deterministic suite currently covers:
 - same-socket maintenance reset behavior;
 - BSL rendezvous expiry and recovery intent.
 
-The suite also captures the current armed-owner-disconnect edge case: after the
-normal owner disconnects while BSL rendezvous is armed, the next maintenance
-socket is classified correctly but BSL entry is not repeated. Correct that
-transition in a separate behavior-change commit and update the expected test.
+The suite also covers the armed-owner-disconnect edge case: if the normal owner
+leaves while BSL rendezvous is armed, the next maintenance socket must trigger
+the deferred BSL entry rather than receiving an application-mode UART.
 
 ## Ordinary TCP transport
 
@@ -296,6 +295,16 @@ transition in a separate behavior-change commit and update the expected test.
   parked-client limit.
 - Expected: The old Zigbee2MQTT socket is closed at the safety limit while the
   active maintenance connection remains exclusive.
+
+### MNT-10 — Armed normal owner disconnects before flasher arrival
+
+- Status: `NOT RUN`
+- Procedure: Keep Zigbee2MQTT active, invoke `/cmdZigBSL` so rendezvous is
+  armed, stop Zigbee2MQTT before opening the flashing socket, then connect the
+  flashing tool within the rendezvous timeout.
+- Expected: Zigbee2MQTT gets maximum runtime and leaves normally; the accepted
+  flashing socket becomes the exclusive maintenance owner; the ESP32 enters
+  BSL at that moment and the tool receives the bootloader stream.
 
 ## Radio firmware and role changes
 
