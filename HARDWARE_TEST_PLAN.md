@@ -288,7 +288,8 @@ the deferred BSL entry rather than receiving an application-mode UART.
 Run `tests/zigbee_stream_pump_test.cpp` and
 `tests/zigbee_transport_mode_test.cpp` after every change to common byte
 forwarding, endpoint flow control, transport option ordering, or GPIO33 mode
-mapping.
+mapping. Run `tests/zigbee_serial_owner_test.cpp` after every change to UART
+ownership or passive-observation admission.
 
 ### STR-01 — Shared duplex stream pump
 
@@ -306,6 +307,14 @@ mapping.
 - Expected: The deterministic suite covers the exact `TCP`, `USB Bridged`, and
   `USB Direct` option ordering plus TCP-listener, software-bridge, and
   direct-GPIO mode mapping.
+
+### OWN-01 — Passive-observer owner policy
+
+- Status: `PASS`
+- Procedure: Compile and run `tests/zigbee_serial_owner_test.cpp`.
+- Expected: Only normal TCP and USB Bridged owners admit passive ZNP
+  observations. No owner, local diagnostics, and TCP maintenance remain
+  excluded.
 
 ## Transport diagnostics
 
@@ -483,7 +492,9 @@ category.
 - Expected: Last-known values remain visible and physical identity remains
   unchanged. Ordinary USB Direct entry reports Metadata Status `Cached` and
   Network Information Status `Cached`; a pending running image remains
-  `Awaiting Observation`. A missing cache remains `Unavailable`.
+  `Awaiting Observation`. Missing physical identity remains `Unavailable`;
+  missing running-image information with valid physical identity reports
+  `Awaiting Observation`.
 
 ## Maintenance rendezvous and UART exclusion
 

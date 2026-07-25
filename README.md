@@ -199,8 +199,8 @@ Information is divided by its actual invalidation lifetime:
 | Scope | Values | Refresh rule |
 | --- | --- | --- |
 | Physical identity | Chip/family information, flash capacity, factory IEEE | Kept indefinitely for the soldered radio; read again only if the cache is absent or incompatible |
-| Running image | Firmware build, stack version, active ZNP IEEE, role, CCFG mode and BSL settings | Marked pending before BSL access; ordinary `SYS_VERSION` and `UTIL_GET_DEVICE_INFO` responses refresh the observable fields |
-| Network snapshot | PAN ID, channel, joined state, parent IEEE, extended PAN ID | Restored as last-known data and refreshed from ordinary `ZDO_EXT_NWK_INFO` and `ZDO_STATE_CHANGE_IND` traffic |
+| Running image | Firmware build, stack version, active ZNP IEEE, role, CCFG mode and BSL settings | Marked pending before BSL access; ordinary `SYS_VERSION` and `UTIL_GET_DEVICE_INFO` responses over normal TCP or USB Bridged refresh the observable fields |
+| Network snapshot | PAN ID, channel, joined state, parent IEEE, extended PAN ID | Restored as last-known data and refreshed from ordinary `ZDO_EXT_NWK_INFO` and `ZDO_STATE_CHANGE_IND` traffic over normal TCP or USB Bridged |
 
 The gateway does not query the UART at boot when valid physical identity exists.
 It also does not run a BSL/NV scan after remote flashing. The returning normal
@@ -221,7 +221,8 @@ idle, and is not part of normal metadata collection.
   path.
 - `Refreshing`: an explicit local identification pass is running.
 - `Verified`: an explicit local identification pass completed.
-- `Observed`: the running image was identified from normal ZNP traffic.
+- `Observed`: the running image was identified from transparent application
+  ZNP traffic over normal TCP or USB Bridged.
 - `Awaiting Observation`: BSL access may have changed image-owned values.
 - `Unavailable`: required information is not available.
 
@@ -229,8 +230,8 @@ idle, and is not part of normal metadata collection.
 
 - `Cached`: last-known information was restored but not fully observed this
   boot.
-- `Observed`: a complete network-information response was seen in normal
-  traffic.
+- `Observed`: a complete network-information response was seen in transparent
+  application traffic over normal TCP or USB Bridged.
 - `Refreshed`: an explicit local diagnostic pass obtained the snapshot.
 - `Unavailable`: no valid network snapshot exists.
 
@@ -281,6 +282,9 @@ c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_stream_pump_test.cpp -o 
 
 c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_transport_mode_test.cpp -o /tmp/zigbee_transport_mode_test
 /tmp/zigbee_transport_mode_test
+
+c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_serial_owner_test.cpp -o /tmp/zigbee_serial_owner_test
+/tmp/zigbee_serial_owner_test
 ```
 
 The host tests validate deterministic state and parser logic. They do not

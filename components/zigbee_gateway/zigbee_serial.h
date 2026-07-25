@@ -5,6 +5,8 @@
 
 #include "esphome/components/uart/uart.h"
 
+#include "zigbee_serial_owner.h"
+
 namespace esphome {
 namespace zigbee_gateway {
 
@@ -16,13 +18,7 @@ namespace zigbee_gateway {
 /// stream bridge must explicitly own it before consuming or producing bytes.
 class ZigbeeSerialInterface {
  public:
-  enum class Owner : uint8_t {
-    NONE = 0,
-    LOCAL = 1,
-    TCP_NORMAL = 2,
-    TCP_MAINTENANCE = 3,
-    USB_BRIDGE = 4,
-  };
+  using Owner = ZigbeeSerialOwner;
 
   void set_uart(uart::UARTComponent *uart) { this->uart_ = uart; }
 

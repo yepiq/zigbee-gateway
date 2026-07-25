@@ -1648,13 +1648,14 @@ void ZigbeeGatewayComponent::reset_sniffer_(ZnpSnifferState &state) {
 }
 
 void ZigbeeGatewayComponent::queue_znp_observation_(const ZnpObservation &observation) {
-  // Passive observation is valid only for the transparent normal owner. Local
-  // diagnostics already publish their own results, and maintenance bytes must
-  // remain completely opaque.
-  if (this->serial_.owner() != ZigbeeSerialInterface::Owner::TCP_NORMAL)
+  // Passive observation is valid for transparent application streams over
+  // normal TCP or USB Bridged. Local diagnostics already publish their own
+  // results, and maintenance BSL bytes must remain completely opaque.
+  if (!zigbee_serial_owner_allows_passive_znp_observation(
+          this->serial_.owner()))
     return;
   if (this->pending_znp_observation_count_ == this->pending_znp_observations_.size()) {
-    // Keep the most recent ordered observations if one unusually busy TCP
+    // Keep the most recent ordered observations if one unusually busy stream
     // pump contains more recognized frames than the fixed queue can hold.
     std::move(this->pending_znp_observations_.begin() + 1,
               this->pending_znp_observations_.end(),
