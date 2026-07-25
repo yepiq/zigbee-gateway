@@ -47,7 +47,6 @@ substitutions:
   znp_byte_timeout_ms: 10 # per-byte timeout
   znp_overall_timeout_ms: 500 # max time to match the expected SRSP
   znp_post_send_delay_ms: 10 # settle delay after SREQ
-  znp_sniffer_idle_timeout_ms: 200 # idle gap to flush partial TX frames
   znp_retries: 2
 
   bsl_ack_timeout_ms: 50 # wait for 0xCC after SYNC / before response
@@ -68,47 +67,7 @@ esphome:
   name_add_mac_suffix: false
   project:
     name: yepiq.Zigbee_Gateway
-    version: '0.90b'
-  includes:
-    - yzg.h
-  on_boot:
-    # NOTE: Keep priority at 600 or higher so stream_server hasn't started yet, avoiding UART contention during BSL probe.
-    - priority: 600
-      then:
-        - script.execute: get_zigbee_chip_info
-    - priority: 50
-      then:
-        - lambda: |-
-            // Register minimal REST endpoints on ESP-IDF web server
-            using esphome::web_server_idf::AsyncWebHandler;
-            using esphome::web_server_idf::AsyncWebServerRequest;
-
-            struct SimpleHandler : public AsyncWebHandler {
-              std::string uri_;
-              std::function<void()> action_;
-              explicit SimpleHandler(const std::string &uri, std::function<void()> action)
-                  : uri_(uri), action_(std::move(action)) {}
-
-              bool canHandle(AsyncWebServerRequest *request) const override {
-                // only handle exact-URI matches
-                return request->url() == uri_;
-              }
-
-              void handleRequest(AsyncWebServerRequest *request) override {
-                if (action_) action_();
-                request->send(200, "text/plain", "OK\n");
-              }
-            };
-
-            // Register handlers via WebServerBase (ESP-IDF backend)
-            using esphome::web_server_base::global_web_server_base;
-            if (global_web_server_base != nullptr) {
-              global_web_server_base->add_handler(new SimpleHandler("/cmdZigBSL", [](){ id(zigbee_bsl_mode).execute(); }));
-              global_web_server_base->add_handler(new SimpleHandler("/cmdZigRST", [](){ id(zigbee_reset).execute(); }));
-              ESP_LOGI("http", "Registered IDF endpoints: /cmdZigBSL, /cmdZigRST");
-            } else {
-              ESP_LOGW("http", "Web server not yet initialized; endpoints not registered");
-            }
+    version: '1.91b'
 
 esp32:
   board: esp32dev
@@ -118,17 +77,21 @@ esp32:
       CONFIG_FREERTOS_UNICORE: y
       CONFIG_ESP_TASK_WDT_TIMEOUT_S: '10'
 
-### External component: Stream Server
+### External components
 external_components:
-  - source: github://oxan/esphome-stream-server
+  # Local while developing; the published configuration can track this
+  # repository once the component extraction is committed.
+  - source: components
+    components: [zigbee_gateway]
+
+  # Temporary compile-only compatibility source from upstream PR #71.
+  # This server remains scheduled for complete replacement.
+  - source: github://grob6000/esphome-stream-server@2eade8f0ec9c5282631e09af95f08b634c6a5c20
+    components: [stream_server]
 
 api:
-
-globals:
-  - id: znp_sniffer_enabled
-    type: bool
-    restore_value: no
-    initial_value: 'true'
+  # This Ethernet gateway must remain operational without an API client.
+  reboot_timeout: 0s
 
 logger:
   level: DEBUG
@@ -139,6 +102,77 @@ ota:
 web_server:
   version: 3
   id: websrv
+
+### ZIGBEE RADIO
+#
+# Detailed chip-family, CCFG/BSL, flash-layout, NVOCMP, NIB field-map, and
+# protocol behavior documentation now lives beside the implementation in:
+#   components/zigbee_gateway/{zigbee_gateway.cpp,protocol.h}
+zigbee_gateway:
+  id: zigbee_gateway_component
+  uart_id: uart_bus
+  socket_connected: socket_status
+  ip_address: mcu_ip_address
+  tcp_port: ${tcp_serial_port}
+
+  reset_pin:
+    number: ${zRST_pin}
+    inverted: ${zRST_inverted}
+    ignore_strapping_warning: ${zRST_strapping}
+  bsl_pin:
+    number: ${zBSL_pin}
+    inverted: ${zBSL_inverted}
+    ignore_strapping_warning: ${zBSL_strapping}
+
+  reset_timeout: ${zigbee_reset_timeout_ms}ms
+  znp_start_timeout: ${znp_start_timeout_ms}ms
+  znp_byte_timeout: ${znp_byte_timeout_ms}ms
+  znp_overall_timeout: ${znp_overall_timeout_ms}ms
+  znp_post_send_delay: ${znp_post_send_delay_ms}ms
+  znp_retries: ${znp_retries}
+  bsl_ack_timeout: ${bsl_ack_timeout_ms}ms
+  bsl_header_timeout: ${bsl_header_timeout_ms}ms
+  bsl_payload_timeout: ${bsl_payload_timeout_ms}ms
+  bsl_sync_gap: ${bsl_sync_gap_ms}ms
+
+  # Koenkk Z-Stack NVOCMP layout hints; retain these as configuration because
+  # other radio firmware builds can place NV differently.
+  nv_base_cc26x2: ${nv_base_cc26x2}
+  nv_size_cc26x2: ${nv_size_cc26x2}
+  nv_base_cc26x2x7: ${nv_base_cc26x2x7}
+  nv_size_cc26x2x7: ${nv_size_cc26x2x7}
+
+  restart:
+    name: Restart Zigbee
+  enter_bsl:
+    name: Zigbee BSL Mode
+  router_rejoin:
+    name: Zigbee Router Rejoin
+
+  flash_size:
+    name: Zigbee Flash Size
+  tx_power:
+    name: Zigbee TX Power
+  pan_id:
+    name: Zigbee PAN ID
+  channel:
+    name: Zigbee Channel
+  on_network:
+    name: Zigbee Network Status
+  firmware:
+    name: Zigbee Firmware
+  stack:
+    name: Zigbee Stack
+  self_ieee:
+    name: Zigbee Self IEEE Address
+  parent_ieee:
+    name: Zigbee Parent IEEE Address
+  role:
+    name: Zigbee Role
+  extended_pan_id:
+    name: Zigbee Extended PAN ID
+  hardware:
+    name: Zigbee Hardware
 
 ### CONTROL SETTINGS
 
@@ -171,32 +205,6 @@ button:
     id: restart_esp32
     entity_category: config
 
-  ### Zigbee Restart
-  - platform: template
-    name: Restart Zigbee
-    id: restart_zigbee
-    entity_category: config
-    icon: mdi:restart
-    on_press:
-      - script.execute: zigbee_reset
-
-  ### Zigbee Flash Mode
-  - platform: template
-    name: Zigbee BSL Mode
-    icon: mdi:cellphone-arrow-down
-    entity_category: config
-    on_press:
-      - script.execute: zigbee_bsl_mode
-
-  ### Zigbee Router Rejoin
-  - platform: template
-    name: Zigbee Router Rejoin
-    id: router_rejoin
-    entity_category: config
-    icon: mdi:access-point-plus
-    on_press:
-      - script.execute: zigbee_router_reconnect
-
 binary_sensor:
   ### Status of physical button
   - platform: gpio
@@ -219,12 +227,6 @@ binary_sensor:
       id: socket_status
       entity_category: ''
 
-  # NV flag indicating whether the device is part of a Zigbee network (BDBNODEISONANETWORK)
-  - platform: template
-    name: Zigbee Network Status
-    id: zigbee_on_network
-    device_class: connectivity
-
 sensor:
   - platform: stream_server
     connection_count:
@@ -236,41 +238,6 @@ sensor:
   - platform: uptime
     id: uptime_s
     update_interval: 60s
-
-  - platform: template
-    name: Zigbee Flash Size
-    id: zigbee_flash_size
-    device_class: data_size
-    unit_of_measurement: B
-    accuracy_decimals: 0
-    state_class: measurement
-    update_interval: never
-    icon: mdi:memory
-
-  - platform: template
-    name: Zigbee TX Power
-    id: zigbee_tx_power
-    unit_of_measurement: dBm
-    accuracy_decimals: 0
-    device_class: signal_strength
-    state_class: measurement
-    update_interval: never
-    icon: mdi:access-point
-
-  # Zigbee PAN ID from NV NIB (ZCD_NV_NIB.nwkPanId)
-  - platform: template
-    name: Zigbee PAN ID
-    id: zigbee_pan_id
-    accuracy_decimals: 0
-    update_interval: never
-    icon: mdi:identifier
-
-  - platform: template
-    name: Zigbee Channel
-    id: zigbee_channel
-    accuracy_decimals: 0
-    update_interval: never
-    icon: mdi:access-point-network
 
 switch:
   ### Mode Switch: OFF for LAN, ON for USB
@@ -324,49 +291,6 @@ switch:
     restore_mode: ALWAYS_OFF
 
 text_sensor:
-  - platform: template
-    name: Zigbee Firmware
-    id: zigbee_fw
-    update_interval: never
-    icon: mdi:source-repository
-
-  - platform: template
-    name: Zigbee Stack
-    id: zigbee_stack
-    update_interval: never
-    icon: mdi:zigbee
-
-  - platform: template
-    name: Zigbee Self IEEE Address
-    id: zigbee_ieee_address_self
-    update_interval: never
-    icon: mdi:identifier
-
-  - platform: template
-    name: Zigbee Parent IEEE Address
-    id: zigbee_ieee_address_parent
-    update_interval: never
-    icon: mdi:access-point-network
-
-  - platform: template
-    name: Zigbee Role
-    id: zigbee_role
-    update_interval: never
-    icon: mdi:access-point
-
-  # Extended PAN ID as space-separated decimal bytes from NV NIB (ZCD_NV_NIB.extendedPANID)
-  - platform: template
-    name: Zigbee Extended PAN ID
-    id: zigbee_ext_pan_id
-    update_interval: never
-    icon: mdi:identifier
-
-  - platform: template
-    name: Zigbee Hardware
-    id: zigbee_hw
-    update_interval: never
-    icon: mdi:chip
-
   - platform: ethernet_info
     ip_address:
       name: IP Address
@@ -380,757 +304,12 @@ text_sensor:
       disabled_by_default: true
       icon: mdi:lan
 
-output:
-  ### CC2652P Restart
-  - platform: gpio
-    id: zRST
-    pin:
-      number: ${zRST_pin}
-      ignore_strapping_warning: ${zRST_strapping}
-      inverted: ${zRST_inverted}
-
-  ### Zigbee CC2652P to flash mode output
-  - platform: gpio
-    id: zBSL
-    pin:
-      number: ${zBSL_pin}
-      ignore_strapping_warning: ${zBSL_strapping}
-      inverted: ${zBSL_inverted}
-
-script:
-  ### Zigbee Reset
-  - id: zigbee_reset
-    then:
-      - logger.log: Resetting Zigbee module.
-      - output.turn_on: zRST
-      - delay: 15ms
-      - output.turn_off: zRST
-      - wait_until:
-          # Wait for SYS_RESET_IND without blocking >30 ms
-          timeout: ${zigbee_reset_timeout_ms}ms
-          condition:
-            lambda: |-
-              // Single-tick cooperative ZNP SYS_RESET_IND detector.
-              {
-                uint8_t b, len, cmd0, cmd1;
-
-                // Need at least one byte to try
-                if (!id(uart_bus).available()) return false;
-
-                // SOF
-                if (!id(uart_bus).read_byte(&b)) return false;
-                if (b != 0xFE) return false;  // junk eaten for this tick
-
-                // Header
-                while (!id(uart_bus).read_byte(&len))  { /* spin */ }
-                while (!id(uart_bus).read_byte(&cmd0)) { /* spin */ }
-                while (!id(uart_bus).read_byte(&cmd1)) { /* spin */ }
-
-                // Payload + FCS: ZNP LEN excludes SOF & FCS
-                uint16_t body_len = (uint16_t)len + 1;
-                while (body_len) {
-                  if (id(uart_bus).read_byte(&b)) body_len--;
-                }
-
-                if (cmd0 == 0x41 && cmd1 == 0x80) {
-                  ESP_LOGD("znp", "SYS_RESET_IND received");
-                  return true;
-                }
-                return false;
-              }
-      - logger.log: Zigbee module has been reset.
-      - if:
-          condition:
-            text_sensor.state:
-              id: zigbee_role
-              state: Router
-          then:
-            - logger.log: Zigbee role is Router; skipping ZNP routines.
-            - lambda: id(znp_sniffer_enabled) = false; // Disable the ZNP sniffer in router mode
-          else:
-            - logger.log: Re-run all ZNP routines.
-            - lambda: id(znp_sniffer_enabled) = true; // Re-enable the ZNP sniffer after BSL entry
-            - script.execute: get_zigbee_ieee_address_self
-            - script.wait: get_zigbee_ieee_address_self
-            - script.execute: get_zigbee_fw_version
-            - script.wait: get_zigbee_fw_version
-
-  ### Zigbee Bootloader Mode (BSL)
-  - id: zigbee_bsl_mode
-    then:
-      - logger.log: Put Zigbee in BSL mode.
-
-      - lambda: id(znp_sniffer_enabled) = false; // Disable ZNP sniffer for the duration of BSL entry
-
-      - output.turn_on: zBSL # BSL = LOW (physical)
-      - output.turn_on: zRST # RESET = LOW (physical)
-      - delay: 50ms # hold both LOW ~50 ms
-
-      - output.turn_off: zRST # RESET = HIGH (release reset)
-      - delay: 250ms # keep BSL LOW after releasing reset
-
-      - output.turn_off: zBSL # BSL = HIGH (release BSL)
-      - delay: 100ms # settle after releasing BSL
-
-      - lambda: |-
-          ESP_LOGI("main", "Zigbee is in BSL mode. To update firmware, run: cc2538-bsl.py -p socket://%s:${tcp_serial_port} -evw firmware.hex", id(mcu_ip_address).state.c_str());
-
-  ### Zigbee Router Reconnect
-  - id: zigbee_router_reconnect
-    then:
-      - if:
-          any:
-            - text_sensor.state:
-                id: zigbee_role
-                state: Router
-            - text_sensor.state:
-                id: zigbee_role
-                state: Unknown
-          then:
-            - logger.log: Put Zigbee in router rejoin mode.
-            - output.turn_on: zBSL # BSL = LOW (physical) because output is inverted
-            - delay: 250ms # keep BSL LOW briefly
-            - output.turn_off: zBSL # BSL = HIGH (release)
-            - delay: 500ms # settle
-            - logger.log: Zigbee router rejoin pulse complete.
-          else:
-            - logger.log: Router rejoin is only applicable in Router role; skipping.
-
-  ### Zigbee get IEEE address and role
-  - id: get_zigbee_ieee_address_self
-    then:
-      - logger.log: Get Zigbee IEEE Address
-      - lambda: |-
-          if (id(socket_status).state) {
-            ESP_LOGW("znp", "Socket client connected; skipping UTIL_GET_DEVICE_INFO to avoid UART contention.");
-            return;
-          }
-
-          uint8_t buf[16] = {0};
-          bool ok = znp_exec(
-            id(uart_bus),
-            /*sreq*/ 0x27, 0x00,
-            /*expect*/ 0x67, 0x00,
-            [&](const uint8_t* data, uint8_t len) {
-              if (len != 14) return; // defensive
-              // data[0] = devType; data[1..8] = IEEE LSB-first
-              char ieee[24];
-              snprintf(ieee, sizeof(ieee), "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
-                       data[8], data[7], data[6], data[5], data[4], data[3], data[2], data[1]);
-              id(zigbee_ieee_address_self).publish_state(ieee);
-
-              const char *role = "Unknown";
-              switch (data[0]) {
-                case 0x00: role = "Coordinator"; break;
-                case 0x01: role = "Router"; break;
-                case 0x02: role = "End Device"; break;
-              }
-              id(zigbee_role).publish_state(role);
-              ESP_LOGI("znp", "UTIL_GET_DEVICE_INFO -> IEEE: %s, Role: %s", ieee, role);
-            },
-            buf, sizeof(buf),
-            ${znp_start_timeout_ms}, ${znp_byte_timeout_ms}, ${znp_overall_timeout_ms},
-            ${znp_retries}, ${znp_post_send_delay_ms}
-          );
-
-          if (!ok) {
-            // Do not overwrite an IEEE obtained via BSL; keep existing value.
-            ESP_LOGW("znp", "UTIL_GET_DEVICE_INFO: no valid response within timeout/retries; preserving current IEEE.");
-            id(zigbee_role).publish_state("Unknown");
-          }
-
-  - id: get_zigbee_fw_version
-    then:
-      - logger.log: Get Zigbee Firmware Version
-      - lambda: |-
-          if (id(socket_status).state) {
-            ESP_LOGW("znp", "Socket client connected; skipping SYS_VERSION to avoid UART contention.");
-            return;
-          }
-
-          uint8_t buf[16] = {0};
-          bool ok = znp_exec(
-            id(uart_bus),
-            /*sreq*/ 0x21, 0x02,
-            /*expect*/ 0x61, 0x02,
-            [&](const uint8_t* data, uint8_t len) {
-              if (len != 10) return; // defensive
-              uint8_t major = data[2];
-              uint8_t minor = data[3];
-              uint8_t maint = data[4];
-              uint32_t build = (uint32_t)data[5] | ((uint32_t)data[6] << 8) | ((uint32_t)data[7] << 16) | ((uint32_t)data[8] << 24);
-              id(zigbee_fw).publish_state(std::to_string(build));
-              char stack[16];
-              snprintf(stack, sizeof(stack), "%u.%u.%u", major, minor, maint);
-              id(zigbee_stack).publish_state(stack);
-              ESP_LOGI("znp", "SYS_VERSION -> build=%u, stack=%s", build, stack);
-            },
-            buf, sizeof(buf),
-            ${znp_start_timeout_ms}, ${znp_byte_timeout_ms}, ${znp_overall_timeout_ms},
-            ${znp_retries}, ${znp_post_send_delay_ms}
-          );
-
-          if (!ok) {
-            ESP_LOGW("znp", "SYS_VERSION: no valid response within timeout/retries");
-            id(zigbee_fw).publish_state("Unknown");
-            id(zigbee_stack).publish_state("Unknown");
-          }
-
-  ### Zigbee NVCOMP scan
-  - id: get_zigbee_nvcomp_extract
-    parameters:
-      family: int
-    then:
-      - logger.log: Updating Zigbee NV-based sensors
-      - lambda: |-
-          // Frontend wiring for the generic NVOCMP backend in nzg.h.
-          // family: 0=unknown, 1=x2, 2=x2x7; selects NV base/size.
-          const uint32_t nv_base = (family == 2) ? ${nv_base_cc26x2x7} : ${nv_base_cc26x2};
-          const uint32_t nv_size = (family == 2) ? ${nv_size_cc26x2x7} : ${nv_size_cc26x2};
-          ESP_LOGI("bsl", "NV region: base=0x%06X size=0x%04X (%u KB)",
-                   nv_base, nv_size, (unsigned)(nv_size / 1024));
-
-          NzgNvScanConfig cfg;
-          cfg.nv_base            = nv_base;
-          cfg.nv_size            = nv_size;
-          cfg.ack_timeout_ms     = ${bsl_ack_timeout_ms};
-          cfg.header_timeout_ms  = ${bsl_header_timeout_ms};
-          cfg.payload_timeout_ms = ${bsl_payload_timeout_ms};
-
-          enum WantedIndex {
-            IDX_LOGICAL_TYPE = 0,
-            IDX_BDB_ON_NETWORK,
-            IDX_NIB,
-            WANTED_COUNT
-          };
-
-          NzgNvWanted wanted[WANTED_COUNT] = {
-            {1, 0x0000, 0x0087, "ZCD_NV_LOGICAL_TYPE",        false},
-            {1, 0x0000, 0x0055, "ZCD_NV_BDBNODEISONANETWORK", false},
-            {1, 0x0000, 0x0021, "ZCD_NV_NIB",                 false},
-          };
-
-          // === Per-item handlers (frontend only: decode payload + publish sensors) ===
-
-          auto handle_logical_type = [&](const NzgNvItemHeader &hdr,
-                                         const uint8_t *buf_le,
-                                         uint16_t used) {
-            // Logical node type: 0=Coordinator, 1=Router, 2=End Device.
-            if (used < 1) {
-              ESP_LOGW("bsl", "%s: payload too short (got=%u, expected>=1)",
-                       "ZCD_NV_LOGICAL_TYPE", (unsigned) used);
-              return;
-            }
-            const char *role;
-            switch (buf_le[0]) {
-              case 0x00: role = "Coordinator"; break;
-              case 0x01: role = "Router";      break;
-              case 0x02: role = "End Device";  break;
-              default:   role = "Unknown";     break;
-            }
-            ESP_LOGI("bsl", "ZCD_NV_LOGICAL_TYPE: logical_type=0x%02X -> %s",
-                     (unsigned) buf_le[0], role);
-            // We publish into the same text_sensor as the ZNP UTIL_GET_DEVICE_INFO path.
-            id(zigbee_role).publish_state(role);
-          };
-
-          auto handle_bdb_on_network = [&](const NzgNvItemHeader &hdr,
-                                           const uint8_t *buf_le,
-                                           uint16_t used) {
-            // BDBNODEISONANETWORK: 0 = not on a network, 1 = on a network.
-            if (used < 1) {
-              ESP_LOGW("bsl", "%s: payload too short (got=%u, expected>=1)",
-                       "ZCD_NV_BDBNODEISONANETWORK", (unsigned) used);
-              return;
-            }
-            bool on = (buf_le[0] != 0);
-            ESP_LOGI("bsl", "ZCD_NV_BDBNODEISONANETWORK: on_network=%s",
-                     on ? "true" : "false");
-            id(zigbee_on_network).publish_state(on);
-          };
-
-          auto handle_nib = [&](const NzgNvItemHeader &hdr,
-                                const uint8_t *buf_le,
-                                uint16_t used) {
-            // NIB (Network Information Base) serialized as NV item ZCD_NV_NIB.
-            // This NV blob is a flat snapshot of (most of) the nwkIB_t structure used by
-            // Z-Stack 3.x on CC13x2/CC26x2. For the Koenkk NVOCMP build on CC2652 the
-            // on-flash payload is 116 bytes. The layout below is a *field-accurate* map
-            // for the parts we care about, anchored on values that can be cross-checked
-            // against other NV items (PAN ID, Extended PAN ID, coordinator IEEE).
-            //
-            // Offs  Size  Name / Purpose (best-effort map; '*' = confirmed by cross-check)
-            // ----  ----  ---------------------------------------------------------------
-            // 0x00  1     nwkSequenceNum
-            // 0x01  1     passiveAckTimeout
-            // 0x02  1     maxBroadcastRetries
-            // 0x03  1  *  MaxChildren (51 on this FW; matches ZCD_NV_MAXCHILDREN)
-            // 0x04  1  *  MaxDepth (15; matches ZCD_NV_MAXDEPTH)
-            // 0x05  1  *  MaxRouters (51; matches ZCD_NV_MAXROUTERS)
-            // 0x06  1     dummyNeighborTable (placeholder for pointer; always 0)
-            // 0x07  1     broadcastDeliveryTime
-            // 0x08  1     reportConstantCost
-            // 0x09  1     routeDiscRetries
-            // 0x0A  1     dummyRoutingTable (placeholder for pointer)
-            // 0x0B  1     secureAllFrames (0/1)
-            // 0x0C  1     securityLevel (5 for Zigbee Pro)
-            // 0x0D  1     symLink
-            // 0x0E  1     capabilityInfo (MAC capability flags, e.g. 0x8E)
-            // 0x0F  1     transactionPersistenceTime LSB  (little-endian)
-            // 0x10  1     transactionPersistenceTime MSB
-            // 0x11  1     nwkProtocolVersion
-            // 0x12  1     routeDiscoveryTime
-            // 0x13  1     routeExpiryTime
-            // 0x14  2  *  nwkDevAddress (short address, LE; 0x0002 for this router)
-            // 0x16  1     impl-specific byte (unknown_16)
-            // 0x17  1     impl-specific byte (unknown_17)
-            // 0x18  1  *  nwkLogicalChannel (IEEE 802.15.4 channel number; 11 on this network)
-            // 0x19  1     impl-specific byte (unknown_19)
-            // 0x1A  2  *  nwkCoordAddress (short addr of parent/coordinator, LE; 0x0000 here)
-            // 0x1C  8  *  nwkCoordExtAddress[8] (EUI-64 of parent/coordinator, LSB-first on flash)
-            //             
-            // 0x24  2  *  nwkPanId (16-bit PAN ID, LE; 7E 6D = 0x6D7E = 28030)
-            // 0x26  1     nwkState (enum nwk_states_t; value 0x00 / 0x08 seen so far)
-            // 0x27  1     pad / impl-specific
-            // 0x28  4  *  channelList (primary channel bitmask; 00 F8 FF 07 = 0x07FFF800)
-            // 0x2C  4     beaconOrder / superframeOrder / scanDuration / battLifeExt (packed)
-            // 0x30  4     allocatedRouterAddresses (counter / address-pool tracking)
-            // 0x34  4     allocatedEndDeviceAddresses
-            // 0x38  1     nodeDepth (likely; 0x01 in this dump)
-            // 0x39  8  *  extendedPANID[8] (EUI-64 form of extended PAN ID, MSB-first on flash)
-            //             
-            // 0x41..0x73   remaining security keying / concentrator / manager / statistics
-            //             fields. These are treated as opaque counters/flags for now.
-
-            if (used >= 0x27) {
-              uint16_t nwkDevAddress     = (uint16_t) buf_le[0x14] | ((uint16_t) buf_le[0x15] << 8);
-              uint8_t  nwkLogicalChannel = buf_le[0x18];
-              uint8_t  nwkState          = buf_le[0x26];
-              uint8_t  maxChildren       = buf_le[0x03];
-              uint8_t  maxDepth          = buf_le[0x04];
-              uint8_t  maxRouters        = buf_le[0x05];
-
-              ESP_LOGI("bsl",
-                       "ZCD_NV_NIB: nwkDevAddress=0x%04X (%u) nwkLogicalChannel=%u nwkState=0x%02X",
-                       (unsigned) nwkDevAddress, (unsigned) nwkDevAddress,
-                       (unsigned) nwkLogicalChannel, (unsigned) nwkState);
-              ESP_LOGI("bsl", "ZCD_NV_NIB: MaxChildren=%u MaxRouters=%u MaxDepth=%u",
-                       (unsigned) maxChildren, (unsigned) maxRouters, (unsigned) maxDepth);
-
-              // Publish logical channel into numeric sensor.
-              id(zigbee_channel).publish_state((float) nwkLogicalChannel);
-            }
-
-            if (used >= 0x26) {
-              uint16_t pan = (uint16_t) buf_le[0x24] | ((uint16_t) buf_le[0x25] << 8);
-              ESP_LOGI("bsl", "ZCD_NV_NIB: nwkPanId=0x%04X (%u)",
-                       (unsigned) pan, (unsigned) pan);
-              id(zigbee_pan_id).publish_state((float) pan);
-            }
-
-            if (used >= 0x39 + 8) {
-              const uint8_t *coord = &buf_le[0x1C];
-              ESP_LOGI("bsl",
-                       "ZCD_NV_NIB: nwkCoordExtAddress=%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
-                       coord[7], coord[6], coord[5], coord[4],
-                       coord[3], coord[2], coord[1], coord[0]);
-              char coord_str[24];
-              snprintf(coord_str, sizeof(coord_str),
-                       "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
-                       coord[7], coord[6], coord[5], coord[4],
-                       coord[3], coord[2], coord[1], coord[0]);
-              id(zigbee_ieee_address_parent).publish_state(coord_str);
-
-              const uint8_t *extpan = &buf_le[0x39];
-              ESP_LOGI("bsl",
-                       "ZCD_NV_NIB: extendedPANID(msb)=%02X %02X %02X %02X %02X %02X %02X %02X",
-                       extpan[0], extpan[1], extpan[2], extpan[3],
-                       extpan[4], extpan[5], extpan[6], extpan[7]);
-              char extpan_dec[8 * 4];
-              size_t ep = 0;
-              // Publish as space-separated decimal bytes in LSB-first order, to match z2m/ext_pan_id style.
-              for (int i = 7; i >= 0 && ep + 4 < sizeof(extpan_dec); i--) {
-                ep += snprintf(extpan_dec + ep, sizeof(extpan_dec) - ep, "%u",
-                               (unsigned) extpan[i]);
-                if (i > 0)
-                  ep += snprintf(extpan_dec + ep, sizeof(extpan_dec) - ep, " ");
-              }
-              id(zigbee_ext_pan_id).publish_state(extpan_dec);
-            }
-          };
-
-          auto frontend = [&](int idx,
-                              const NzgNvItemHeader &ih,
-                              const uint8_t *buf_le,
-                              uint16_t used) {
-            switch (idx) {
-              case IDX_LOGICAL_TYPE:
-                handle_logical_type(ih, buf_le, used);
-                break;
-              case IDX_BDB_ON_NETWORK:
-                handle_bdb_on_network(ih, buf_le, used);
-                break;
-              case IDX_NIB:
-                handle_nib(ih, buf_le, used);
-                break;
-              default:
-                break;
-            }
-          };
-
-          // Call into the generic backend in nzg.h. It will walk NV pages, filter ACTIVE
-          // items, validate CRC-8 and then invoke our frontend callback for each matching item.
-          nzg_nv_scan_and_dispatch(id(uart_bus), cfg, wanted, WANTED_COUNT, frontend);
-
-  ### Zigbee get chip info via BSL
-  - id: get_zigbee_chip_info
-    then:
-      - logger.log: Get Zigbee Chip Info
-      - if: # FIXME: reverse the logic - disable stream_server temporarily in order to avoid BSL contention issues
-          condition:
-            binary_sensor.is_on: socket_status
-          then:
-            - logger.log: 'Socket client connected; skipping BSL chip probe to avoid UART contention.'
-          else:
-            - script.execute: zigbee_bsl_mode
-            - script.wait: zigbee_bsl_mode
-            - lambda: |-
-                // === BSL sequence (CCTools::detectChipInfo functional replica) ===
-                if (!bsl_sync(id(uart_bus), ${bsl_ack_timeout_ms}, ${bsl_sync_gap_ms})) {
-                  ESP_LOGW("bsl", "Failed to SYNC with BSL");
-                  return;
-                }
-
-                // ---- Constants used by CCTools ----
-                const uint32_t ICEPICK_DEVICE_ID = 0x50001318u;
-                const uint32_t FCFG_USER_ID      = 0x50001294u;
-                const uint32_t FLASH_SIZE_REG    = 0x4003002Cu;
-                const uint32_t ADDR_IEEE_PRIMARY = 0x500012F0u;
-                const uint8_t  PROTO_MASK_IEEE   = 0x04u;
-
-                struct ChipInfo {
-                  enum Family : uint8_t { FAMILY_UNKNOWN = 0, FAMILY_X2 = 1, FAMILY_X2X7 = 2 };
-                  Family   family = FAMILY_UNKNOWN;
-
-                  uint32_t chip_id_be;     // 32-bit value reconstructed as CCTools does
-                  uint16_t chip_id_16;     // lower 16 (MSB two bytes) as CCTools returns
-                  uint32_t wafer_id;       // from ICEPICK_DEVICE_ID
-                  uint32_t pg_rev;         // from ICEPICK_DEVICE_ID
-                  uint8_t  protocols;      // from FCFG_USER_ID[1] >> 4
-                  uint8_t  flash_pages;    // FLASH_SIZE_REG[0]
-                  std::string hwRev;       // CCTools::_getChipDescription result
-                  uint32_t flash_size_bytes; // flash_pages * page_size
-                  uint32_t modeCfg;        // decoded from [flash_end - 88 + 0x0C]
-                  uint32_t bslCfg;         // decoded from [flash_end - 88 + 0x30]
-                } chip = {};
-
-                // ---- GET_CHIP_ID (0x28) exactly like CCTools ----
-                const uint8_t GET_CHIP_ID[] = {0x03, 0x28, 0x28};
-                uint8_t resp[16] = {0};
-                bool ok = bsl_exec(
-                  id(uart_bus),
-                  GET_CHIP_ID, sizeof(GET_CHIP_ID),
-                  [&](const uint8_t* payload, uint8_t len) {
-                    if (len < 4) return; // defensive; CCTools expects 4 bytes
-                    // CCTools rebuilds a 32-bit value with MSB first, then takes the 2 MSB bytes as chip id
-                    uint32_t v = ((uint32_t)payload[0] << 24) |
-                                 ((uint32_t)payload[1] << 16) |
-                                 ((uint32_t)payload[2] << 8)  |
-                                 ((uint32_t)payload[3] << 0);
-                    chip.chip_id_be = v;
-                    chip.chip_id_16 = (uint16_t)(((uint32_t)payload[0] << 8) | payload[1]);
-                  },
-                  resp, sizeof(resp),
-                  ${bsl_ack_timeout_ms}, ${bsl_header_timeout_ms}, ${bsl_payload_timeout_ms},
-                  1
-                );
-
-                if (!ok) {
-                  ESP_LOGW("bsl", "GET_CHIP_ID: no valid response within timeout/retries");
-                  return;
-                }
-
-                ESP_LOGD("bsl", "CHIP_ID(be)=0x%08X chip_id_16=0x%04X", chip.chip_id_be, chip.chip_id_16);
-
-                auto mem_read4 = [&](uint32_t addr, const char* name, uint8_t out[4]) -> bool {
-                  uint8_t blen = 0;
-                  bool ok = bsl_mem_read(
-                    id(uart_bus), addr, /*width*/1, /*count*/1,
-                    out, 4, &blen,
-                    ${bsl_ack_timeout_ms}, ${bsl_header_timeout_ms}, ${bsl_payload_timeout_ms},
-                    1
-                  );
-                  if (!ok || blen < 4) {
-                    ESP_LOGW("bsl", "MEM_READ %s addr=0x%08X FAILED (len=%u)", name, (unsigned)addr, blen);
-                    return false;
-                  }
-                  ESP_LOGV("bsl", "MEM_READ %s @0x%08X -> %02X %02X %02X %02X", name, (unsigned)addr, out[0], out[1], out[2], out[3]);
-                  return true;
-                };
-
-                // ---- ICEPICK_DEVICE_ID ----
-                uint8_t device_id[4] = {0};
-                if (!mem_read4(ICEPICK_DEVICE_ID, "ICEPICK_DEVICE_ID", device_id)) {
-                  ESP_LOGW("bsl", "ICEPICK_DEVICE_ID read failed");
-                  return;
-                }
-                chip.wafer_id = ((((uint32_t)device_id[3] & 0x0F) << 16) |
-                                 ((uint32_t)device_id[2] << 8) |
-                                 ((uint32_t)device_id[1] & 0xF0)) >> 4;
-                chip.pg_rev   = ((uint32_t)device_id[3] & 0xF0) >> 4;
-                ESP_LOGD("bsl", "wafer_id=0x%05X pg_rev=0x%X", chip.wafer_id, (unsigned)chip.pg_rev);
-
-                // ---- FCFG_USER_ID ----
-                // TODO: use this to exctract other features as well:
-                // bit 25:  0: Does not support 20dBm PA
-                //          1: Supports 20dBM PA
-                // bit 23:  0: CC26xx device type
-                //          1: CC13xx device type
-                uint8_t user_id[4] = {0};
-                if (!mem_read4(FCFG_USER_ID, "FCFG_USER_ID", user_id)) {
-                  ESP_LOGW("bsl", "FCFG_USER_ID read failed");
-                  return;
-                }
-                chip.protocols = (uint8_t)(user_id[1] >> 4);
-                ESP_LOGD("bsl", "protocols (user_id[1]>>4)=0x%02X (raw=%02X %02X %02X %02X)", chip.protocols, user_id[0], user_id[1], user_id[2], user_id[3]);
-
-                // ---- FLASH_SIZE ----
-                uint8_t flash_size_reg[4] = {0};
-                if (!mem_read4(FLASH_SIZE_REG, "FLASH_SIZE", flash_size_reg)) {
-                  ESP_LOGW("bsl", "FLASH_SIZE read failed");
-                  return;
-                }
-                chip.flash_pages = flash_size_reg[0];
-
-                // Chip family detection:
-                // Compare CCFG BL_CONFIG mirror (0x50004FD8) with absolute BL_CONFIG at end-of-flash:
-                //   x2   -> 0x00057FD8
-                //   x2x7 -> 0x000AFFD8
-                // If the mirror is unreadable or erased, fall back to which absolute address holds a non-FF word.
-                uint8_t bl_mirror[4] = {0}, bl_x2[4] = {0}, bl_x7[4] = {0};
-                bool ok_m = mem_read4(0x50004FD8u, "BL_CONFIG_MIRROR", bl_mirror); // CCFG mirror + 0x1FD8
-                bool ok_2 = mem_read4(0x00057FD8u, "BL_CONFIG_X2",      bl_x2);     // absolute BL_CONFIG for x2 layout
-                bool ok_7 = mem_read4(0x000AFFD8u, "BL_CONFIG_X7",      bl_x7);     // absolute BL_CONFIG for x2x7 layout
-
-                auto eq4 = [](const uint8_t a[4], const uint8_t b[4]) -> bool {
-                  return (a[0]==b[0]) && (a[1]==b[1]) && (a[2]==b[2]) && (a[3]==b[3]);
-                };
-                auto is_ff4 = [](const uint8_t v[4]) -> bool {
-                  return (v[0]==0xFF) && (v[1]==0xFF) && (v[2]==0xFF) && (v[3]==0xFF);
-                };
-
-                // Primary: mirror equality (only if mirror and candidate are non-FF)
-                bool mirror_eq_x2 = (ok_m && ok_2 && !is_ff4(bl_mirror) && !is_ff4(bl_x2)) ? eq4(bl_mirror, bl_x2) : false;
-                bool mirror_eq_x7 = (ok_m && ok_7 && !is_ff4(bl_mirror) && !is_ff4(bl_x7)) ? eq4(bl_mirror, bl_x7) : false;
-
-                if (mirror_eq_x2 ^ mirror_eq_x7) {
-                  chip.family = mirror_eq_x2 ? ChipInfo::FAMILY_X2 : ChipInfo::FAMILY_X2X7;
-                } else {
-                  // Fallback: presence at absolute addresses (non-FF implies BL_CONFIG is at that end-of-flash)
-                  bool x2_present = (ok_2 && !is_ff4(bl_x2));
-                  bool x7_present = (ok_7 && !is_ff4(bl_x7));
-                  if (x2_present ^ x7_present) {
-                    chip.family = x2_present ? ChipInfo::FAMILY_X2 : ChipInfo::FAMILY_X2X7;
-                  } else {
-                    chip.family = ChipInfo::FAMILY_UNKNOWN;
-                  }
-                }
-
-                const char* fam_str = (chip.family == ChipInfo::FAMILY_X2) ? "cc13x2_cc26x2" :
-                                      (chip.family == ChipInfo::FAMILY_X2X7) ? "cc13x2x7_cc26x2x7" : "unknown";
-                ESP_LOGI("bsl", "Detected chip family: %s", fam_str);
-
-                // ---- Probe mode byte for x2 devices only (CCTools style) ----
-                // XZG reads 0x00057FB4 (x2 map) and uses b_val[1] to refine the human-readable label.
-                // On x2x7, this absolute lives in application space and is not meaningful, so we skip the read.
-                uint8_t mode_probe[4] = {0};
-                uint8_t mode_byte = 0;
-                if (chip.family == ChipInfo::FAMILY_X2) {
-                  (void)mem_read4(0x00057FB4u, "MODE_BYTE_PROBE", mode_probe);
-                  mode_byte = mode_probe[1];
-                }
-
-                auto get_chip_description = [](uint32_t chip_id, uint32_t wafer_id, uint32_t pg_rev, uint8_t mode_cfg) -> std::string {
-                  if (chip_id == 0xB964 || chip_id == 0xB965) {
-                    return "CC2538";
-                  } else if (chip_id == 0x1202 && wafer_id == 0xBB77 && pg_rev == 0x1) {
-                    return "CC2652P7";
-                  } else if (chip_id == 0x3202 && wafer_id == 0xBB41 && pg_rev == 0x3 && mode_cfg == 0xC1) {
-                    return "CC2652P2_launchpad";
-                  } else if (chip_id == 0x3202 && wafer_id == 0xBB41 && pg_rev == 0x3 && mode_cfg == 0xFA) {
-                    return "CC2652P2_other";
-                  } else if (chip_id == 0x3202 && wafer_id == 0xBB41 && pg_rev == 0x3) {
-                    return "CC2652P2_";
-                  } else if (chip_id == 0x3102 && wafer_id == 0xBB41 && pg_rev == 0x3) {
-                    return "CC2652RB";
-                  } else {
-                    char buf[80];
-                    snprintf(buf, sizeof(buf), "Unknown (C: %X, W: %X, P: %X, M: %X)", chip_id, wafer_id, (unsigned)pg_rev, mode_cfg);
-                    return std::string(buf);
-                  }
-                };
-
-                chip.hwRev = get_chip_description(chip.chip_id_16, chip.wafer_id, (uint32_t)chip.pg_rev, mode_byte);
-                ESP_LOGI("bsl", "chip.hwRev=%s (mode_byte=0x%02X)", chip.hwRev.c_str(), mode_byte);
-                id(zigbee_hw).publish_state(chip.hwRev.c_str());
-
-                // Page size: x2x7 parts use 8 KB erase pages; x2 parts use 4 KB
-                int page_size = (chip.family == ChipInfo::FAMILY_X2X7) ? 8192 : 4096;
-                chip.flash_size_bytes = (uint32_t)chip.flash_pages * (uint32_t)page_size;
-                ESP_LOGI("bsl", "FLASH pages=%u page_size=%d -> flash_size=%u bytes (~%u KB)", chip.flash_pages, page_size, chip.flash_size_bytes, chip.flash_size_bytes/1024);
-                id(zigbee_flash_size).publish_state((float)chip.flash_size_bytes);
-
-                // ---- modeCfg & bslCfg at end-of-flash (CCTools math) ----
-                uint32_t mode_cfg_addr = chip.flash_size_bytes - 88 + 0x0C;
-                uint32_t bsl_cfg_addr  = chip.flash_size_bytes - 88 + 0x30;
-                auto decode_addr_be = [](const uint8_t* b) -> uint32_t {
-                  return ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | (uint32_t)b[3];
-                };
-
-                uint8_t mode_raw[4] = {0};
-                if (mem_read4(mode_cfg_addr, "MODE_CFG", mode_raw)) {
-                  chip.modeCfg = decode_addr_be(mode_raw);
-                  ESP_LOGI("bsl", "modeCfg=0x%08X", chip.modeCfg);
-                }
-
-                uint8_t bsl_raw[4] = {0};
-                if (mem_read4(bsl_cfg_addr, "BSL_CFG", bsl_raw)) {
-                  chip.bslCfg = decode_addr_be(bsl_raw);
-                  ESP_LOGI("bsl", "bslCfg=0x%08X", chip.bslCfg);
-
-                  // ---- IEEE primary address (CCTools style) ----
-                  if ((chip.protocols & PROTO_MASK_IEEE) == PROTO_MASK_IEEE) {
-                    uint8_t ieee_b1[4] = {0};  // MSW (addr + 4)
-                    uint8_t ieee_b2[4] = {0};  // LSW (addr + 0)
-
-                    if (mem_read4(ADDR_IEEE_PRIMARY + 4, "IEEE_MSW", ieee_b1) &&
-                        mem_read4(ADDR_IEEE_PRIMARY + 0, "IEEE_LSW", ieee_b2)) {
-
-                      // Build colon-separated EUI-64 exactly like CCTools
-                      char ieee[24];
-                      // b1[3] b1[2] b1[1] b1[0] : b2[3] b2[2] b2[1] b2[0]
-                      snprintf(ieee, sizeof(ieee),
-                               "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
-                               ieee_b1[3], ieee_b1[2], ieee_b1[1], ieee_b1[0],
-                               ieee_b2[3], ieee_b2[2], ieee_b2[1], ieee_b2[0]);
-
-                      ESP_LOGI("bsl", "IEEE (BSL): %s", ieee);
-                      id(zigbee_ieee_address_self).publish_state(ieee);
-                    } else {
-                      ESP_LOGW("bsl", "IEEE read failed (primary=0x%08X)", (unsigned)ADDR_IEEE_PRIMARY);
-                    }
-                  } else {
-                    ESP_LOGD("bsl", "Skipping IEEE read: protocols=0x%02X, mask=0x%02X",
-                             chip.protocols, PROTO_MASK_IEEE);
-                  }
-                }
-
-                // Kick off NVCOMP extraction now that chip.family is known
-                id(get_zigbee_nvcomp_extract).execute((int)chip.family);
-            - script.wait: get_zigbee_nvcomp_extract
-      - script.execute: zigbee_reset
-      - script.wait: zigbee_reset
-
 ### UART Settings
 uart:
   id: uart_bus
   rx_pin: ${uart_rx_pin}
   tx_pin: ${uart_tx_pin}
   baud_rate: ${uart_baud_rate}
-  debug:
-    direction: BOTH
-    dummy_receiver: false
-    after:
-      timeout: ${znp_sniffer_idle_timeout_ms}ms
-    sequence:
-      - lambda: |-
-          // Generic ZNP parser for TX & RX with per-direction state and optional logging.
-          // Skips parsing while in BSL mode (controlled by id(znp_sniffer_enabled)).
-          struct ZnpState { uint8_t st=0,len=0,cmd0=0,cmd1=0,idx=0; uint8_t pay[256]; };
-          static ZnpState tx, rx;
-
-          auto reset = [&](ZnpState &S){ S.st=0; S.len=0; S.cmd0=0; S.cmd1=0; S.idx=0; };
-
-          // If sniffer disabled (e.g., during BSL), reset and exit.
-          if (!id(znp_sniffer_enabled)) {
-            reset(tx); reset(rx);
-            return;
-          }
-
-          auto &S = (direction == uart::UART_DIRECTION_TX) ? tx : rx;
-          auto type_name = [](uint8_t cmd0)->const char*{
-            switch ((cmd0 >> 5) & 0x07) {
-              case 1: return "SREQ";
-              case 2: return "AREQ";
-              case 3: return "SRSP";
-              default: return "UNK";
-            }
-          };
-
-          // Assemble frames across chunks: FE LEN CMD0 CMD1 [LEN bytes] FCS
-          for (size_t i = 0; i < bytes.size(); i++) {
-            uint8_t b = bytes[i];
-            switch (S.st) {
-              case 0: // SEEK_SOF
-                if (b == 0xFE) { S.st = 1; S.len = 0; S.idx = 0; }
-                break;
-              case 1: // LEN
-                S.len = b; S.st = 2; break;
-              case 2: // CMD0
-                S.cmd0 = b; S.st = 3; break;
-              case 3: // CMD1
-                S.cmd1 = b; S.st = (S.len ? 4 : 5); break;
-              case 4: // PAYLOAD
-                if (S.idx < sizeof(S.pay)) S.pay[S.idx++] = b;
-                if (S.idx >= S.len) S.st = 5;
-                break;
-              case 5: { // FCS
-                uint8_t fcs = S.len ^ S.cmd0 ^ S.cmd1;
-                for (uint8_t j = 0; j < S.len && j < sizeof(S.pay); j++) fcs ^= S.pay[j];
-                bool ok = (fcs == b);
-
-                // --- Verbose log for *all* frames (toggle by commenting this line) ---
-                {
-                  char payhex[128]; size_t p=0;
-                  for (uint8_t j=0; j<S.len && p+3<sizeof(payhex); j++) p += snprintf(payhex+p, sizeof(payhex)-p, "%02X", S.pay[j]);
-                  ESP_LOGV("znp-sniff", "[%s] %s sub=0x%02X cmd1=0x%02X len=%u fcs=%s payload=%s",
-                           (direction==uart::UART_DIRECTION_TX?"TX":"RX"), type_name(S.cmd0),
-                           (unsigned)(S.cmd0 & 0x1F), (unsigned)S.cmd1,
-                           (unsigned)S.len, ok?"OK":"BAD", payhex);
-                }
-
-
-                if (ok && ((S.cmd0 >> 5) & 0x07) == 1 && (S.cmd0 & 0x1F) == 0x01) {
-                  // SYS SREQ: candidates for TX power updates
-                  int8_t dbm = 0;
-                  bool matched = false;
-
-                  if (S.cmd1 == 0x14 && S.len == 1) {
-                    // SYS.SetTxPower: payload[0] = signed dBm
-                    dbm = (int8_t) S.pay[0];
-                    matched = true;
-                    ESP_LOGI("znp-sniff", "Detected SYS.SetTxPower -> %d dBm", (int) dbm);
-                  } else if (S.cmd1 == 0x0F && S.len >= 2 && S.pay[0] == 0x00) {
-                    // SYS.StackTune (op=TX_POWER=0x00): payload[1] = signed dBm
-                    dbm = (int8_t) S.pay[1];
-                    matched = true;
-                    ESP_LOGI("znp-sniff", "Detected SYS.StackTune(op=TX_POWER) -> %d dBm", (int) dbm);
-                  }
-
-                  if (matched) {
-                    id(zigbee_tx_power).publish_state((float) dbm);
-                  }
-                }
-
-                reset(S);
-                break;
-              }
-              default:
-                reset(S);
-                break;
-            }
-          }
-
 ### Serial Bridge Settings
 stream_server:
   uart_id: uart_bus

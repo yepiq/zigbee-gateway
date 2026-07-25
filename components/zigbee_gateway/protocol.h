@@ -1,3 +1,15 @@
+#pragma once
+
+#include "esphome.h"
+
+using esphome::App;
+using esphome::delay;
+using esphome::millis;
+using esphome::uart::UARTComponent;
+
+namespace esphome {
+namespace zigbee_gateway {
+
 // -------- UART helpers --------
 // Generic UART utilities used by both ZNP and BSL code paths.
 
@@ -103,7 +115,8 @@ static inline void znp_send(UARTComponent *uart, uint8_t cmd0, uint8_t cmd1,
 // - Verifies FCS; returns true and fills outputs on success.
 // - Returns false on timeout, malformed frame, or FCS mismatch.
 static inline bool znp_recv_once(UARTComponent *uart,
-                                 uint8_t *cmd0, uint8_t *cmd1, uint8_t *data, uint8_t *len,
+                                 uint8_t *cmd0, uint8_t *cmd1,
+                                 uint8_t *data, size_t data_capacity, uint8_t *len,
                                  uint32_t start_timeout_ms, uint32_t byte_timeout_ms)
 {
   if (!uart_seek_byte(uart, 0xFE, start_timeout_ms))
@@ -115,6 +128,19 @@ static inline bool znp_recv_once(UARTComponent *uart,
     return false;
   if (!uart_read_exact_t(uart, cmd1, 1, byte_timeout_ms))
     return false;
+
+  if (*len > data_capacity)
+  {
+    ESP_LOGW("znp", "Dropping oversized frame payload (len=%u, capacity=%u)",
+             (unsigned) *len, (unsigned) data_capacity);
+    uint8_t discarded = 0;
+    for (uint16_t i = 0; i < static_cast<uint16_t>(*len) + 1; i++)
+    {
+      if (!uart_read_byte_t(uart, &discarded, byte_timeout_ms))
+        break;
+    }
+    return false;
+  }
 
   if (!uart_read_exact_t(uart, data, *len, byte_timeout_ms))
     return false;
@@ -138,7 +164,7 @@ static inline bool znp_recv_once(UARTComponent *uart,
 template <typename Pred>
 static inline bool znp_recv_until(UARTComponent *uart,
                                   Pred pred,
-                                  uint8_t *buf, uint8_t *out_len,
+                                  uint8_t *buf, size_t buf_capacity, uint8_t *out_len,
                                   uint32_t start_timeout_ms,
                                   uint32_t byte_timeout_ms,
                                   uint32_t overall_timeout_ms)
@@ -147,7 +173,7 @@ static inline bool znp_recv_until(UARTComponent *uart,
   uint8_t c0 = 0, c1 = 0, len = 0;
   while (millis() - start < overall_timeout_ms)
   {
-    if (znp_recv_once(uart, &c0, &c1, buf, &len, start_timeout_ms, byte_timeout_ms))
+    if (znp_recv_once(uart, &c0, &c1, buf, buf_capacity, &len, start_timeout_ms, byte_timeout_ms))
     {
       if (pred(c0, c1, buf, len))
       {
@@ -173,7 +199,7 @@ static inline bool znp_recv_until(UARTComponent *uart,
 //   exp_cmd0/exp_cmd1   : Expected SRSP header to match
 //   on_match(data,len)  : Callback invoked with DATA[len] of the SRSP (FCS excluded)
 //   scratch             : Caller-provided buffer to hold DATA (must be large enough for response)
-//   scratch_capacity    : Size of scratch; used for documentation/clarity (no dynamic checks here)
+//   scratch_capacity    : Size of scratch; oversized replies are rejected safely
 //   start_timeout_ms    : Time to find SOF before header (per frame)
 //   byte_timeout_ms     : Per-byte timeout inside a frame
 //   overall_timeout_ms  : Overall wait budget for each attempt
@@ -188,7 +214,7 @@ static inline bool znp_exec(UARTComponent *uart,
                             uint8_t sreq_cmd0, uint8_t sreq_cmd1,
                             uint8_t exp_cmd0, uint8_t exp_cmd1,
                             Handler on_match,
-                            uint8_t *scratch, uint8_t scratch_capacity,
+                            uint8_t *scratch, size_t scratch_capacity,
                             uint32_t start_timeout_ms,
                             uint32_t byte_timeout_ms,
                             uint32_t overall_timeout_ms,
@@ -197,8 +223,6 @@ static inline bool znp_exec(UARTComponent *uart,
                             const uint8_t *sreq_data = nullptr,
                             uint8_t sreq_len = 0)
 {
-  (void)scratch_capacity; // document-only; ensure caller passes adequate space
-
   for (uint8_t attempt = 1; attempt <= attempts; ++attempt)
   {
     // Clear any stale RX before (re)starting exchange
@@ -216,7 +240,9 @@ static inline bool znp_exec(UARTComponent *uart,
     // Wait for matching SRSP
     uint8_t len = 0;
     if (znp_recv_until(uart, [=](uint8_t c0, uint8_t c1, const uint8_t *, uint8_t)
-                       { return c0 == exp_cmd0 && c1 == exp_cmd1; }, scratch, &len, start_timeout_ms, byte_timeout_ms, overall_timeout_ms))
+                       { return c0 == exp_cmd0 && c1 == exp_cmd1; },
+                       scratch, scratch_capacity, &len,
+                       start_timeout_ms, byte_timeout_ms, overall_timeout_ms))
     {
       // Success → allow caller to parse DATA and publish
       on_match(scratch, len);
@@ -378,8 +404,6 @@ static inline bool bsl_exec(UARTComponent *uart,
                             uint32_t payload_timeout_ms,
                             uint8_t attempts = 1)
 {
-  (void)scratch_capacity; // caller ensures sufficient space
-
   for (uint8_t attempt = 1; attempt <= attempts; ++attempt)
   {
     {
@@ -418,6 +442,18 @@ static inline bool bsl_exec(UARTComponent *uart,
     if (payload_len == 0)
     {
       ESP_LOGV("bsl", "Empty payload");
+      continue;
+    }
+    if (payload_len > scratch_capacity)
+    {
+      ESP_LOGW("bsl", "Dropping oversized reply payload (len=%u, capacity=%u)",
+               (unsigned) payload_len, (unsigned) scratch_capacity);
+      uint8_t discarded = 0;
+      for (uint8_t i = 0; i < payload_len; i++)
+      {
+        if (!uart_read_byte_t(uart, &discarded, payload_timeout_ms))
+          break;
+      }
       continue;
     }
     if (!uart_read_exact_t(uart, scratch, payload_len, payload_timeout_ms))
@@ -1257,3 +1293,6 @@ static inline void nzg_nv_scan_and_dispatch(UARTComponent *uart,
     }
   }
 }
+
+}  // namespace zigbee_gateway
+}  // namespace esphome
