@@ -322,7 +322,7 @@ mdns:
         version: 1.0
         name: UZG-01
         radio_type: znp
-        baud_rate: 115200
+        baud_rate: ${uart_baud_rate}
         data_flow_control: software
 
 ### Ethernet Settings
