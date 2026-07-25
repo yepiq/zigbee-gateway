@@ -69,7 +69,7 @@ esphome:
   name_add_mac_suffix: false
   project:
     name: yepiq.Zigbee_Gateway
-    version: '1.96b'
+    version: '1.97b'
 
 esp32:
   board: esp32dev
@@ -204,22 +204,22 @@ zigbee_gateway:
 ### CONTROL SETTINGS
 
 select:
-  ### LAN/USB Mode Selector
+  ### Zigbee Serial Transport Selector
   - platform: template
-    name: Mode
+    name: Zigbee Serial Transport
     id: select_mode
     icon: mdi:swap-horizontal
     options:
-      - LAN
-      - USB
-    initial_option: LAN
+      - Zigbee TCP Serial
+      - Zigbee USB Serial
+    initial_option: Zigbee TCP Serial
     optimistic: true
     restore_value: true
     entity_category: config
     set_action:
       - if:
           condition:
-            lambda: 'return x == "USB";'
+            lambda: 'return x == "Zigbee USB Serial";'
           then:
             - switch.turn_on: switch_mode
           else:
@@ -253,7 +253,7 @@ sensor:
     update_interval: 60s
 
 switch:
-  ### Mode Switch: OFF for LAN, ON for USB
+  ### Serial Transport Switch: OFF for TCP, ON for USB
   - platform: gpio
     name: Switch Mode (internal)
     id: switch_mode

@@ -386,13 +386,14 @@ category.
 
 ## Physical controls, discovery, and LEDs
 
-### HW-01 — LAN/USB mode and red LED
+### HW-01 — Zigbee serial transport and red LED
 
 - Status: `NOT RUN`
-- Procedure: Toggle LAN/USB mode from ESPHome and with the physical button.
-- Expected: GPIO33 selects the intended path; the red mode LED matches the
-  selected mode and survives reboot according to the configured restore
-  behavior.
+- Procedure: Toggle between `Zigbee TCP Serial` and `Zigbee USB Serial` from
+  ESPHome and with the physical button.
+- Expected: GPIO33 selects the intended serial path; the red mode LED preserves
+  the original UZG-01 allocation and matches the selected transport; the
+  selection survives reboot according to the configured restore behavior.
 
 ### HW-02 — Blue power LED
 
