@@ -54,7 +54,8 @@ maintenance window and a recovery method.
   logs from power-on through TCP-listener startup.
 - Expected: BSL chip identification, flash-size detection, NVOCMP inspection,
   hardware identity, radio reset, and applicable ZNP firmware diagnostics
-  complete without concurrent TCP UART access. A verified record is committed
+  complete without concurrent TCP UART access. The detected family selects the
+  correct `FLASH_SIZE` unit and NVOCMP layout. A verified record is committed
   before TCP starts.
 
 ### BAS-03 — Diagnostic entity consistency
@@ -77,6 +78,48 @@ maintenance window and a recovery method.
 - Expected: ESP32 returns cleanly, cached Zigbee information restores without
   toggling the radio pins, and Zigbee2MQTT reconnects without radio network
   loss.
+
+## Chip and storage geometry
+
+Run `tests/zigbee_chip_layout_test.cpp` after every change to chip-family
+detection, flash-capacity calculation, or NVOCMP layout selection.
+
+### GEO-01 — Host layout policy
+
+- Status: `PASS`
+- Procedure: Compile and run `tests/zigbee_chip_layout_test.cpp`.
+- Expected: x2 uses a 4 KiB `FLASH_SIZE` unit and three 8 KiB NVOCMP pages;
+  x2x7 uses an 8 KiB `FLASH_SIZE` unit and four 8 KiB NVOCMP pages; an unknown
+  family has no layout.
+- Evidence: Passed with the C++17 warning-enabled host command on 2026-07-26.
+
+### GEO-02 — CC13x2/CC26x2 identification
+
+- Status: `NOT RUN`
+- Procedure: On a supported non-x7 radio with an empty physical-identity cache,
+  capture the family, flash-capacity, CCFG-address, and NV-region logs.
+- Expected: The family is x2; total flash is the register count multiplied by
+  4 KiB; CCFG addresses are derived from that total; NV scanning uses base
+  `0x50000`, size `0x6000`, and page size `0x2000`.
+
+### GEO-03 — CC13x2x7/CC26x2x7 identification
+
+- Status: `NOT RUN`
+- Procedure: On a supported x7 radio with an empty physical-identity cache,
+  capture the family, flash-capacity, CCFG-address, and NV-region logs.
+- Expected: The family is x2x7; total flash is the register count multiplied by
+  8 KiB; CCFG addresses are derived from that total; NV scanning uses base
+  `0xA6000`, size `0x8000`, and page size `0x2000`.
+
+### GEO-04 — Unknown-family safety
+
+- Status: `NOT RUN`
+- Procedure: With a development fixture that produces ambiguous family
+  detection, run an explicit information refresh.
+- Expected: No fallback `FLASH_SIZE` multiplier, end-of-flash CCFG address, or
+  NVOCMP range is used. Identification remains unverified, no partial physical
+  cache is committed, the radio is reset out of BSL, and a later refresh may
+  retry.
 
 ## Persistent radio metadata
 
@@ -269,7 +312,7 @@ category.
   then separately exercise a command-first BSL rendezvous timeout.
 - Expected: Recovery Resets increments only when the ESP32 actually performs
   the recovery reset. Last Event reports `Recovery Reset` after the reset side
-  effect; metadata refresh still completes before normal UART ownership.
+  effect; no intrusive metadata refresh delays normal UART ownership.
 
 ## Ordinary TCP transport
 
@@ -361,8 +404,8 @@ category.
   allow its version/ping check to continue on the same TCP connection.
 - Expected: The ESP32 toggles radio reset without consuming
   `SYS_RESET_IND` or other UART bytes; the tool completes its check.
-  ESPHome waits until that maintenance socket closes before taking UART for its
-  own metadata refresh.
+  ESPHome waits until that maintenance socket closes, then permits the next
+  normal client without taking UART for an intrusive metadata refresh.
 
 ### MNT-06 — Parked Zigbee2MQTT behavior
 
@@ -371,8 +414,8 @@ category.
   Zigbee2MQTT process and gateway connection counters.
 - Expected: Its socket remains open while possible, incoming requests are
   drained and discarded, and it never reaches UART. When maintenance ends, it
-  receives one abortive close; local metadata refresh completes; it then
-  reconnects cleanly.
+  receives one abortive close and reconnects cleanly. Running-image diagnostics
+  refresh only from ordinary ZNP traffic already exchanged by that client.
 
 ### MNT-07 — Aborted maintenance recovery
 
@@ -419,7 +462,7 @@ category.
   Zigbee2MQTT.
 - Expected: Flash and verification succeed, the existing Zigbee network is
   preserved when the image/storage format supports it, and diagnostics reflect
-  the new firmware after the automatic post-maintenance identification pass.
+  the new firmware after normal ZNP traffic passively identifies it.
 
 ### FW-02 — Coordinator downgrade
 
@@ -435,8 +478,8 @@ category.
 - Procedure: In a controlled maintenance window, flash router firmware and
   commission it into another Zigbee network.
 - Expected: The gateway does not assume the transferred image type; cached role
-  remains stale during transfer, is replaced only after local identification,
-  and router rejoin control works.
+  remains last-known during transfer, is replaced only after applicable normal
+  protocol traffic identifies it, and router rejoin control works.
 
 ### FW-04 — Router-to-coordinator conversion
 

@@ -43,33 +43,13 @@ substitutions:
   lan_power_pin: GPIO05
   lan_power_strapping: true
 
-  zigbee_reset_timeout_ms: 5000
-
-  znp_start_timeout_ms: 100 # wait for 0xFE
-  znp_byte_timeout_ms: 10 # per-byte timeout
-  znp_overall_timeout_ms: 500 # max time to match the expected SRSP
-  znp_post_send_delay_ms: 10 # settle delay after SREQ
-  znp_retries: 2
-
-  bsl_ack_timeout_ms: 50 # wait for 0xCC after SYNC / before response
-  bsl_header_timeout_ms: 50 # read [len][chk] header
-  bsl_payload_timeout_ms: 50 # read payload bytes
-  bsl_sync_gap_ms: 5 # gap between two SYNC bytes
-
-  # === NVOCMP (Koenkk’s patched Z-Stack) layout hints ===
-  # Adjust these if you use a different Z-Stack build.
-  nv_base_cc26x2: 0x00050000 # CC26x2/CC13x2 (non-x7) NV start, size 0x6000
-  nv_size_cc26x2: 0x00006000
-  nv_base_cc26x2x7: 0x000A6000 # CC26x2x7/CC13x2x7 (e.g., CC2652P7) NV start, size 0x8000
-  nv_size_cc26x2x7: 0x00008000
-
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   name_add_mac_suffix: false
   project:
     name: yepiq.Zigbee_Gateway
-    version: '2.02b'
+    version: '2.03b'
 
 esp32:
   board: esp32dev
@@ -104,7 +84,7 @@ web_server:
 #
 # Detailed chip-family, CCFG/BSL, flash-layout, NVOCMP, NIB field-map, and
 # protocol behavior documentation now lives beside the implementation in:
-#   components/zigbee_gateway/{zigbee_gateway.cpp,protocol.h}
+#   components/zigbee_gateway/{zigbee_gateway.cpp,zigbee_chip_layout.h,protocol.h}
 zigbee_gateway:
   id: zigbee_gateway_component
   uart_id: uart_bus
@@ -146,24 +126,6 @@ zigbee_gateway:
     number: ${zBSL_pin}
     inverted: ${zBSL_inverted}
     ignore_strapping_warning: ${zBSL_strapping}
-
-  reset_timeout: ${zigbee_reset_timeout_ms}ms
-  znp_start_timeout: ${znp_start_timeout_ms}ms
-  znp_byte_timeout: ${znp_byte_timeout_ms}ms
-  znp_overall_timeout: ${znp_overall_timeout_ms}ms
-  znp_post_send_delay: ${znp_post_send_delay_ms}ms
-  znp_retries: ${znp_retries}
-  bsl_ack_timeout: ${bsl_ack_timeout_ms}ms
-  bsl_header_timeout: ${bsl_header_timeout_ms}ms
-  bsl_payload_timeout: ${bsl_payload_timeout_ms}ms
-  bsl_sync_gap: ${bsl_sync_gap_ms}ms
-
-  # Koenkk Z-Stack NVOCMP layout hints; retain these as configuration because
-  # other radio firmware builds can place NV differently.
-  nv_base_cc26x2: ${nv_base_cc26x2}
-  nv_size_cc26x2: ${nv_size_cc26x2}
-  nv_base_cc26x2x7: ${nv_base_cc26x2x7}
-  nv_size_cc26x2x7: ${nv_size_cc26x2x7}
 
   restart:
     name: Restart Zigbee

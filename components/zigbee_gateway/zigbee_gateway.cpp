@@ -20,6 +20,45 @@ namespace zigbee_gateway {
 
 static const char *const TAG = "zigbee_gateway";
 
+// Protocol timing policy
+// ----------------------
+// These values tune the gateway's private ZNP/BSL parsers. They are not board
+// wiring or user service policy and therefore intentionally stay out of YAML.
+static constexpr uint32_t RESET_IND_TIMEOUT_MS = 5000;
+static constexpr uint32_t RESET_PARSER_START_TIMEOUT_MS = 20;
+
+struct ZnpTiming {
+  uint32_t start_timeout_ms;
+  uint32_t byte_timeout_ms;
+  uint32_t overall_timeout_ms;
+  uint32_t post_send_delay_ms;
+  uint8_t retries;
+};
+
+static constexpr ZnpTiming ZNP_TIMING{
+    100,  // wait for SOF 0xFE
+    10,   // per-byte timeout inside one frame
+    500,  // maximum wait for the expected SRSP per attempt
+    10,   // settle gap after an SREQ
+    2,    // SREQ/SRSP attempts
+};
+
+struct BslTiming {
+  uint32_t sync_ack_timeout_ms;
+  uint32_t command_ack_timeout_ms;
+  uint32_t header_timeout_ms;
+  uint32_t payload_timeout_ms;
+  uint32_t sync_gap_ms;
+};
+
+static constexpr BslTiming BSL_TIMING{
+    50,  // optional 0xCC observation after SYNC
+    50,  // mandatory 0xCC before a command response
+    50,  // [length][checksum] header
+    50,  // response payload bytes
+    5,   // gap between the two SYNC bytes
+};
+
 static void format_ieee_lsb_(const uint8_t ieee_lsb[8], char output[24]) {
   snprintf(output, 24, "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
            ieee_lsb[7], ieee_lsb[6], ieee_lsb[5], ieee_lsb[4],
@@ -131,10 +170,14 @@ void ZigbeeGatewayComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  TCP compatibility port: %u", (unsigned) this->tcp_port_);
   ESP_LOGCONFIG(TAG, "  Pending socket timeout: %u ms", (unsigned) this->pending_socket_timeout_ms_);
   ESP_LOGCONFIG(TAG, "  Parked socket timeout: %u ms", (unsigned) this->parked_socket_timeout_ms_);
-  ESP_LOGCONFIG(TAG, "  NV CC13x2/CC26x2: base=0x%08X size=0x%08X", (unsigned) this->nv_base_cc26x2_,
-                (unsigned) this->nv_size_cc26x2_);
-  ESP_LOGCONFIG(TAG, "  NV CC13x2x7/CC26x2x7: base=0x%08X size=0x%08X",
-                (unsigned) this->nv_base_cc26x2x7_, (unsigned) this->nv_size_cc26x2x7_);
+  ESP_LOGCONFIG(TAG, "  NV %s: base=0x%08X size=0x%08X page=0x%04X",
+                CHIP_LAYOUT_X2.name, (unsigned) CHIP_LAYOUT_X2.nv_base,
+                (unsigned) CHIP_LAYOUT_X2.nv_size,
+                (unsigned) CHIP_LAYOUT_X2.nv_page_size);
+  ESP_LOGCONFIG(TAG, "  NV %s: base=0x%08X size=0x%08X page=0x%04X",
+                CHIP_LAYOUT_X2X7.name, (unsigned) CHIP_LAYOUT_X2X7.nv_base,
+                (unsigned) CHIP_LAYOUT_X2X7.nv_size,
+                (unsigned) CHIP_LAYOUT_X2X7.nv_page_size);
 }
 
 void ZigbeeGatewayComponent::on_shutdown() { this->tcp_server_.shutdown(); }
@@ -531,7 +574,8 @@ bool ZigbeeGatewayComponent::startup_probe_() {
     ESP_LOGW(TAG, "Socket client connected; skipping BSL chip probe to avoid UART contention.");
   } else {
     this->enter_bsl_blocking_();
-    if (!bsl_sync(&this->serial_, this->bsl_ack_timeout_ms_, this->bsl_sync_gap_ms_)) {
+    if (!bsl_sync(&this->serial_, BSL_TIMING.sync_ack_timeout_ms,
+                  BSL_TIMING.sync_gap_ms)) {
       ESP_LOGW(TAG, "Failed to SYNC with BSL");
     } else {
       ChipInfo chip;
@@ -581,7 +625,7 @@ void ZigbeeGatewayComponent::restart_blocking_() {
     ESP_LOGD(TAG, "SYS_RESET_IND received");
   else
     ESP_LOGW(TAG, "SYS_RESET_IND was not received before the %u ms timeout",
-             (unsigned) this->reset_timeout_ms_);
+             (unsigned) RESET_IND_TIMEOUT_MS);
 
   ESP_LOGI(TAG, "Zigbee module has been reset.");
   this->run_post_reset_diagnostics_();
@@ -594,9 +638,10 @@ bool ZigbeeGatewayComponent::wait_for_reset_ind_blocking_() {
   uint8_t length = 0;
   uint8_t payload[256] = {0};
 
-  while (millis() - started < this->reset_timeout_ms_) {
+  while (millis() - started < RESET_IND_TIMEOUT_MS) {
     if (znp_recv_once(&this->serial_, &cmd0, &cmd1, payload, sizeof(payload), &length,
-                      std::min<uint32_t>(this->znp_start_timeout_ms_, 20), this->znp_byte_timeout_ms_)) {
+                      RESET_PARSER_START_TIMEOUT_MS,
+                      ZNP_TIMING.byte_timeout_ms)) {
       if (cmd0 == 0x41 && cmd1 == 0x80)
         return true;
     }
@@ -706,7 +751,7 @@ void ZigbeeGatewayComponent::process_async_reset_() {
     }
   }
 
-  if (millis() - this->async_reset_started_ms_ >= this->reset_timeout_ms_)
+  if (millis() - this->async_reset_started_ms_ >= RESET_IND_TIMEOUT_MS)
     this->finish_async_restart_(false);
 }
 
@@ -714,7 +759,7 @@ void ZigbeeGatewayComponent::finish_async_restart_(bool reset_ind_seen) {
   this->async_reset_active_ = false;
   if (!reset_ind_seen)
     ESP_LOGW(TAG, "SYS_RESET_IND was not received before the %u ms timeout",
-             (unsigned) this->reset_timeout_ms_);
+             (unsigned) RESET_IND_TIMEOUT_MS);
   ESP_LOGI(TAG, "Zigbee module has been reset.");
   this->run_post_reset_diagnostics_();
   this->operation_active_ = false;
@@ -864,8 +909,9 @@ bool ZigbeeGatewayComponent::set_radio_connection_led_(bool on) {
       [&status_ok](const uint8_t *data, uint8_t length) {
         status_ok = length == 1 && data[0] == 0x00;
       },
-      response, sizeof(response), this->znp_start_timeout_ms_, this->znp_byte_timeout_ms_,
-      this->znp_overall_timeout_ms_, this->znp_retries_, this->znp_post_send_delay_ms_,
+      response, sizeof(response), ZNP_TIMING.start_timeout_ms,
+      ZNP_TIMING.byte_timeout_ms, ZNP_TIMING.overall_timeout_ms,
+      ZNP_TIMING.retries, ZNP_TIMING.post_send_delay_ms,
       request, sizeof(request));
   this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
 
@@ -929,8 +975,9 @@ void ZigbeeGatewayComponent::get_device_info_() {
         this->publish_role_(role);
         ESP_LOGI(TAG, "UTIL_GET_DEVICE_INFO -> IEEE: %s, Role: %s", ieee, role);
       },
-      buffer, sizeof(buffer), this->znp_start_timeout_ms_, this->znp_byte_timeout_ms_,
-      this->znp_overall_timeout_ms_, this->znp_retries_, this->znp_post_send_delay_ms_);
+      buffer, sizeof(buffer), ZNP_TIMING.start_timeout_ms,
+      ZNP_TIMING.byte_timeout_ms, ZNP_TIMING.overall_timeout_ms,
+      ZNP_TIMING.retries, ZNP_TIMING.post_send_delay_ms);
 
   if (!ok) {
     // Do not overwrite an IEEE obtained through BSL.
@@ -968,8 +1015,9 @@ void ZigbeeGatewayComponent::get_firmware_version_() {
         this->publish_stack_(stack);
         ESP_LOGI(TAG, "SYS_VERSION -> build=%u, stack=%s", (unsigned) build, stack);
       },
-      buffer, sizeof(buffer), this->znp_start_timeout_ms_, this->znp_byte_timeout_ms_,
-      this->znp_overall_timeout_ms_, this->znp_retries_, this->znp_post_send_delay_ms_);
+      buffer, sizeof(buffer), ZNP_TIMING.start_timeout_ms,
+      ZNP_TIMING.byte_timeout_ms, ZNP_TIMING.overall_timeout_ms,
+      ZNP_TIMING.retries, ZNP_TIMING.post_send_delay_ms);
 
   if (!ok) {
     ESP_LOGW(TAG, "SYS_VERSION timed out.");
@@ -981,8 +1029,9 @@ void ZigbeeGatewayComponent::get_firmware_version_() {
 bool ZigbeeGatewayComponent::read_memory_word_(uint32_t address, const char *name, uint8_t out[4]) {
   uint8_t length = 0;
   const bool ok = bsl_mem_read(&this->serial_, address, /* width */ 1, /* count */ 1, out, 4, &length,
-                               this->bsl_ack_timeout_ms_, this->bsl_header_timeout_ms_,
-                               this->bsl_payload_timeout_ms_, 1);
+                               BSL_TIMING.command_ack_timeout_ms,
+                               BSL_TIMING.header_timeout_ms,
+                               BSL_TIMING.payload_timeout_ms, 1);
   if (!ok || length < 4) {
     ESP_LOGW(TAG, "MEM_READ %s addr=0x%08X FAILED (len=%u)", name, (unsigned) address,
              (unsigned) length);
@@ -1017,8 +1066,8 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
                            (static_cast<uint32_t>(payload[2]) << 8) | static_cast<uint32_t>(payload[3]);
         chip->chip_id_16 = (static_cast<uint16_t>(payload[0]) << 8) | payload[1];
       },
-      response, sizeof(response), this->bsl_ack_timeout_ms_, this->bsl_header_timeout_ms_,
-      this->bsl_payload_timeout_ms_, 1);
+      response, sizeof(response), BSL_TIMING.command_ack_timeout_ms,
+      BSL_TIMING.header_timeout_ms, BSL_TIMING.payload_timeout_ms, 1);
   if (!chip_id_ok) {
     ESP_LOGW(TAG, "GET_CHIP_ID timed out.");
     return false;
@@ -1048,8 +1097,10 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
   ESP_LOGD(TAG, "protocols=0x%02X (FCFG_USER_ID=%02X %02X %02X %02X)", chip->protocols, user_id[0],
            user_id[1], user_id[2], user_id[3]);
 
-  // FLASH_SIZE[0] reports the number of physical flash pages. The byte count
-  // depends on the family-specific page size determined below.
+  // FLASH_SIZE[0] reports a family-dependent count. CCTools and the working
+  // baseline multiply it by 4 KiB on x2 and 8 KiB on x2x7. This register unit
+  // is not the NVOCMP page size; the two geometries are modeled separately in
+  // ZigbeeChipLayout.
   uint8_t flash_size_reg[4] = {0};
   if (!this->read_memory_word_(FLASH_SIZE_REG, "FLASH_SIZE", flash_size_reg))
     return false;
@@ -1060,8 +1111,8 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
   // Compare the CCFG BL_CONFIG mirror at 0x50004FD8 with the absolute
   // BL_CONFIG location at the end of each supported flash layout:
   //
-  //   CC13x2/CC26x2     -> 0x00057FD8, 4 KiB erase pages
-  //   CC13x2x7/CC26x2x7 -> 0x000AFFD8, 8 KiB erase pages
+  //   CC13x2/CC26x2     -> 0x00057FD8, 4 KiB FLASH_SIZE units
+  //   CC13x2x7/CC26x2x7 -> 0x000AFFD8, 8 KiB FLASH_SIZE units
   //
   // If the mirror is unreadable or erased, fall back to whichever absolute
   // address contains a non-erased word. Ambiguous results stay UNKNOWN.
@@ -1092,11 +1143,8 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
       chip->family = x2_present ? ChipFamily::CC13X2_CC26X2 : ChipFamily::CC13X2X7_CC26X2X7;
   }
 
-  const char *family_name = chip->family == ChipFamily::CC13X2_CC26X2
-                                ? "cc13x2_cc26x2"
-                                : (chip->family == ChipFamily::CC13X2X7_CC26X2X7
-                                       ? "cc13x2x7_cc26x2x7"
-                                       : "unknown");
+  const ZigbeeChipLayout *layout = chip_layout_for_family(chip->family);
+  const char *family_name = layout != nullptr ? layout->name : "unknown";
   ESP_LOGI(TAG, "Detected chip family: %s", family_name);
 
   // XZG probes 0x00057FB4 on x2 and uses byte 1 to refine the human-readable
@@ -1133,14 +1181,25 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
   ESP_LOGI(TAG, "Hardware: %s (mode byte=0x%02X)", chip->hardware.c_str(), mode_byte);
   this->publish_hardware_(chip->hardware.c_str());
 
-  // x2x7 devices use 8 KiB flash pages; x2 devices use 4 KiB pages. Preserve
-  // the working baseline's 4 KiB fallback for UNKNOWN, but make it visible.
-  const uint32_t page_size = chip->family == ChipFamily::CC13X2X7_CC26X2X7 ? 8192 : 4096;
-  if (chip->family == ChipFamily::UNKNOWN)
-    ESP_LOGW(TAG, "Unknown chip family; retaining the legacy 4 KiB page-size fallback.");
-  chip->flash_size_bytes = static_cast<uint32_t>(chip->flash_pages) * page_size;
-  ESP_LOGI(TAG, "FLASH pages=%u page_size=%u -> flash_size=%u bytes (~%u KiB)",
-           (unsigned) chip->flash_pages, (unsigned) page_size, (unsigned) chip->flash_size_bytes,
+  if (layout == nullptr) {
+    // No family geometry means there is no defensible multiplier for
+    // FLASH_SIZE_REG[0] and no safe end-of-flash CCFG or NVOCMP address.
+    // Fail the identification instead of persisting a partial physical record:
+    // a later boot or manual refresh must be allowed to try identification
+    // again once support for the family exists.
+    ESP_LOGW(TAG,
+             "Unknown chip family; skipping flash-size, CCFG, IEEE, and NV layout reads, "
+             "and leaving physical identity unverified.");
+    this->capture_chip_info_(*chip);
+    return false;
+  }
+
+  chip->flash_size_bytes =
+      static_cast<uint32_t>(chip->flash_pages) * layout->flash_size_unit_bytes;
+  ESP_LOGI(TAG, "FLASH units=%u unit_size=%u -> flash_size=%u bytes (~%u KiB)",
+           (unsigned) chip->flash_pages,
+           (unsigned) layout->flash_size_unit_bytes,
+           (unsigned) chip->flash_size_bytes,
            (unsigned) (chip->flash_size_bytes / 1024));
   this->publish_flash_size_(chip->flash_size_bytes);
 
@@ -1186,28 +1245,27 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
 }
 
 void ZigbeeGatewayComponent::scan_nv_(ChipFamily family) {
-  // NVOCMP region selection
-  // -----------------------
-  // Koenkk's patched Z-Stack layouts used by the working configuration:
-  //   CC13x2/CC26x2     base 0x00050000, size 0x6000
-  //   CC13x2x7/CC26x2x7 base 0x000A6000, size 0x8000
-  //
-  // Preserve the existing x2 fallback for UNKNOWN until the component/UART
-  // design discussion establishes explicit unsupported-family behavior.
-  const bool x7 = family == ChipFamily::CC13X2X7_CC26X2X7;
-  const uint32_t nv_base = x7 ? this->nv_base_cc26x2x7_ : this->nv_base_cc26x2_;
-  const uint32_t nv_size = x7 ? this->nv_size_cc26x2x7_ : this->nv_size_cc26x2_;
-  if (family == ChipFamily::UNKNOWN)
-    ESP_LOGW(TAG, "Unknown chip family; retaining the legacy CC13x2/CC26x2 NV-region fallback.");
-  ESP_LOGI(TAG, "NV region: base=0x%06X size=0x%04X (%u KiB)", (unsigned) nv_base,
-           (unsigned) nv_size, (unsigned) (nv_size / 1024));
+  // NVOCMP geometry is selected only after chip-family identification. The
+  // FLASH_SIZE register unit differs between x2 and x2x7, while Koenkk's
+  // supported NVOCMP layouts use explicit 0x2000-byte pages on both. Never
+  // substitute the flash-size unit for the NV page size.
+  const ZigbeeChipLayout *layout = chip_layout_for_family(family);
+  if (layout == nullptr) {
+    ESP_LOGW(TAG, "Unknown chip family; skipping NVOCMP scan without a verified layout.");
+    return;
+  }
+  ESP_LOGI(TAG, "NV region: base=0x%06X size=0x%04X page=0x%04X (%u pages)",
+           (unsigned) layout->nv_base, (unsigned) layout->nv_size,
+           (unsigned) layout->nv_page_size,
+           (unsigned) nv_page_count(*layout));
 
   NzgNvScanConfig config{
-      .nv_base = nv_base,
-      .nv_size = nv_size,
-      .ack_timeout_ms = this->bsl_ack_timeout_ms_,
-      .header_timeout_ms = this->bsl_header_timeout_ms_,
-      .payload_timeout_ms = this->bsl_payload_timeout_ms_,
+      .nv_base = layout->nv_base,
+      .nv_size = layout->nv_size,
+      .page_size = layout->nv_page_size,
+      .ack_timeout_ms = BSL_TIMING.command_ack_timeout_ms,
+      .header_timeout_ms = BSL_TIMING.header_timeout_ms,
+      .payload_timeout_ms = BSL_TIMING.payload_timeout_ms,
   };
 
   enum WantedIndex : int {

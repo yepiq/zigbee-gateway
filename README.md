@@ -53,8 +53,21 @@ The working configuration in [`yzg.yaml`](yzg.yaml) targets the UZG-01:
 | LAN8720 clock | GPIO17 | Clock output |
 | LAN8720 power | GPIO5 | Strapping pin |
 
-All configurable pins, ports, timeouts, baud rates, and NV layout hints are
-declared as substitutions at the start of `yzg.yaml`.
+Board wiring, UART baud rate, TCP port, and TCP session-policy timeouts are
+declared as substitutions at the start of `yzg.yaml`. ZNP/BSL parser timing and
+the supported chip/storage layouts are implementation policy in the component,
+not per-device YAML settings.
+
+The detected chip family selects both forms of storage geometry independently:
+
+| Family | `FLASH_SIZE` unit | NVOCMP region | NVOCMP page |
+| --- | --- | --- | --- |
+| CC13x2/CC26x2 | 4 KiB | `0x50000` + `0x6000` | 8 KiB (3 pages) |
+| CC13x2x7/CC26x2x7 | 8 KiB | `0xA6000` + `0x8000` | 8 KiB (4 pages) |
+
+The `FLASH_SIZE` multiplier is therefore never reused as the NVOCMP page size.
+An unidentified family is not assigned a fallback layout: layout-dependent
+CCFG and NV reads are skipped and the physical identity remains unverified.
 
 ### LED terminology and behavior
 
@@ -210,6 +223,9 @@ c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_tcp_state_test.cpp -o /t
 
 c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_znp_observer_test.cpp -o /tmp/zigbee_znp_observer_test
 /tmp/zigbee_znp_observer_test
+
+c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_chip_layout_test.cpp -o /tmp/zigbee_chip_layout_test
+/tmp/zigbee_chip_layout_test
 ```
 
 The host tests validate deterministic state and parser logic. They do not
@@ -221,6 +237,8 @@ legacy/current flashing-tool interoperability and Zigbee2MQTT recovery.
 - [`yzg.yaml`](yzg.yaml): complete UZG-01 ESPHome configuration.
 - [`components/zigbee_gateway`](components/zigbee_gateway): external component,
   UART arbitration, TCP transport, protocols, caches, and passive observer.
+- [`components/zigbee_gateway/zigbee_chip_layout.h`](components/zigbee_gateway/zigbee_chip_layout.h):
+  detected-family flash and NVOCMP geometry.
 - [`tests`](tests): dependency-free host tests.
 - [`HARDWARE_TEST_PLAN.md`](HARDWARE_TEST_PLAN.md): durable bench checklist and
   deferred feature tests.

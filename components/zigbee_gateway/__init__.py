@@ -59,22 +59,6 @@ CONF_ENTER_BSL = "enter_bsl"
 CONF_ROUTER_REJOIN = "router_rejoin"
 CONF_REFRESH_METADATA = "refresh_metadata"
 
-CONF_RESET_TIMEOUT = "reset_timeout"
-CONF_ZNP_START_TIMEOUT = "znp_start_timeout"
-CONF_ZNP_BYTE_TIMEOUT = "znp_byte_timeout"
-CONF_ZNP_OVERALL_TIMEOUT = "znp_overall_timeout"
-CONF_ZNP_POST_SEND_DELAY = "znp_post_send_delay"
-CONF_ZNP_RETRIES = "znp_retries"
-CONF_BSL_ACK_TIMEOUT = "bsl_ack_timeout"
-CONF_BSL_HEADER_TIMEOUT = "bsl_header_timeout"
-CONF_BSL_PAYLOAD_TIMEOUT = "bsl_payload_timeout"
-CONF_BSL_SYNC_GAP = "bsl_sync_gap"
-
-CONF_NV_BASE_CC26X2 = "nv_base_cc26x2"
-CONF_NV_SIZE_CC26X2 = "nv_size_cc26x2"
-CONF_NV_BASE_CC26X2X7 = "nv_base_cc26x2x7"
-CONF_NV_SIZE_CC26X2X7 = "nv_size_cc26x2x7"
-
 zigbee_gateway_ns = cg.esphome_ns.namespace("zigbee_gateway")
 ZigbeeGatewayComponent = zigbee_gateway_ns.class_(
     "ZigbeeGatewayComponent", cg.Component, uart.UARTDevice
@@ -236,22 +220,6 @@ CONFIG_SCHEMA = cv.All(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:refresh",
             ),
-            cv.Optional(CONF_RESET_TIMEOUT, default="5s"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_ZNP_START_TIMEOUT, default="100ms"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_ZNP_BYTE_TIMEOUT, default="10ms"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_ZNP_OVERALL_TIMEOUT, default="500ms"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_ZNP_POST_SEND_DELAY, default="10ms"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_ZNP_RETRIES, default=2): cv.int_range(min=1, max=10),
-            cv.Optional(CONF_BSL_ACK_TIMEOUT, default="50ms"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_BSL_HEADER_TIMEOUT, default="50ms"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_BSL_PAYLOAD_TIMEOUT, default="50ms"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_BSL_SYNC_GAP, default="5ms"): cv.positive_time_period_milliseconds,
-            # Koenkk Z-Stack NVOCMP layout hints. These remain configurable
-            # because alternative radio firmware builds can place NV elsewhere.
-            cv.Optional(CONF_NV_BASE_CC26X2, default=0x00050000): cv.uint32_t,
-            cv.Optional(CONF_NV_SIZE_CC26X2, default=0x00006000): cv.uint32_t,
-            cv.Optional(CONF_NV_BASE_CC26X2X7, default=0x000A6000): cv.uint32_t,
-            cv.Optional(CONF_NV_SIZE_CC26X2X7, default=0x00008000): cv.uint32_t,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -339,50 +307,6 @@ async def to_code(config):
     cg.add(
         var.set_parked_socket_timeout(
             config[CONF_PARKED_SOCKET_TIMEOUT].total_milliseconds
-        )
-    )
-    cg.add(var.set_reset_timeout(config[CONF_RESET_TIMEOUT].total_milliseconds))
-    cg.add(
-        var.set_znp_start_timeout(
-            config[CONF_ZNP_START_TIMEOUT].total_milliseconds
-        )
-    )
-    cg.add(
-        var.set_znp_byte_timeout(config[CONF_ZNP_BYTE_TIMEOUT].total_milliseconds)
-    )
-    cg.add(
-        var.set_znp_overall_timeout(
-            config[CONF_ZNP_OVERALL_TIMEOUT].total_milliseconds
-        )
-    )
-    cg.add(
-        var.set_znp_post_send_delay(
-            config[CONF_ZNP_POST_SEND_DELAY].total_milliseconds
-        )
-    )
-    cg.add(var.set_znp_retries(config[CONF_ZNP_RETRIES]))
-    cg.add(
-        var.set_bsl_ack_timeout(config[CONF_BSL_ACK_TIMEOUT].total_milliseconds)
-    )
-    cg.add(
-        var.set_bsl_header_timeout(
-            config[CONF_BSL_HEADER_TIMEOUT].total_milliseconds
-        )
-    )
-    cg.add(
-        var.set_bsl_payload_timeout(
-            config[CONF_BSL_PAYLOAD_TIMEOUT].total_milliseconds
-        )
-    )
-    cg.add(var.set_bsl_sync_gap(config[CONF_BSL_SYNC_GAP].total_milliseconds))
-    cg.add(
-        var.set_nv_cc26x2(
-            config[CONF_NV_BASE_CC26X2], config[CONF_NV_SIZE_CC26X2]
-        )
-    )
-    cg.add(
-        var.set_nv_cc26x2x7(
-            config[CONF_NV_BASE_CC26X2X7], config[CONF_NV_SIZE_CC26X2X7]
         )
     )
 

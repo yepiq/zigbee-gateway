@@ -14,6 +14,7 @@
 #include "esphome/core/preferences.h"
 
 #include "protocol.h"
+#include "zigbee_chip_layout.h"
 #include "zigbee_metadata_cache.h"
 #include "zigbee_tcp_server.h"
 #include "zigbee_znp_observer.h"
@@ -93,24 +94,6 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
     this->parked_socket_timeout_ms_ = value;
     this->tcp_server_.set_park_timeout(value);
   }
-  void set_reset_timeout(uint32_t value) { this->reset_timeout_ms_ = value; }
-  void set_znp_start_timeout(uint32_t value) { this->znp_start_timeout_ms_ = value; }
-  void set_znp_byte_timeout(uint32_t value) { this->znp_byte_timeout_ms_ = value; }
-  void set_znp_overall_timeout(uint32_t value) { this->znp_overall_timeout_ms_ = value; }
-  void set_znp_post_send_delay(uint32_t value) { this->znp_post_send_delay_ms_ = value; }
-  void set_znp_retries(uint8_t value) { this->znp_retries_ = value; }
-  void set_bsl_ack_timeout(uint32_t value) { this->bsl_ack_timeout_ms_ = value; }
-  void set_bsl_header_timeout(uint32_t value) { this->bsl_header_timeout_ms_ = value; }
-  void set_bsl_payload_timeout(uint32_t value) { this->bsl_payload_timeout_ms_ = value; }
-  void set_bsl_sync_gap(uint32_t value) { this->bsl_sync_gap_ms_ = value; }
-  void set_nv_cc26x2(uint32_t base, uint32_t size) {
-    this->nv_base_cc26x2_ = base;
-    this->nv_size_cc26x2_ = size;
-  }
-  void set_nv_cc26x2x7(uint32_t base, uint32_t size) {
-    this->nv_base_cc26x2x7_ = base;
-    this->nv_size_cc26x2x7_ = size;
-  }
 
   void setup() override;
   void loop() override;
@@ -126,12 +109,6 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void request_metadata_refresh();
 
  protected:
-  enum class ChipFamily : uint8_t {
-    UNKNOWN = 0,
-    CC13X2_CC26X2 = 1,
-    CC13X2X7_CC26X2X7 = 2,
-  };
-
   struct ChipInfo {
     ChipFamily family{ChipFamily::UNKNOWN};
     uint32_t chip_id_be{0};
@@ -252,20 +229,6 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   uint16_t tcp_port_{6638};
   uint32_t pending_socket_timeout_ms_{30000};
   uint32_t parked_socket_timeout_ms_{600000};
-  uint32_t reset_timeout_ms_{5000};
-  uint32_t znp_start_timeout_ms_{100};
-  uint32_t znp_byte_timeout_ms_{10};
-  uint32_t znp_overall_timeout_ms_{500};
-  uint32_t znp_post_send_delay_ms_{10};
-  uint8_t znp_retries_{2};
-  uint32_t bsl_ack_timeout_ms_{50};
-  uint32_t bsl_header_timeout_ms_{50};
-  uint32_t bsl_payload_timeout_ms_{50};
-  uint32_t bsl_sync_gap_ms_{5};
-  uint32_t nv_base_cc26x2_{0x00050000};
-  uint32_t nv_size_cc26x2_{0x00006000};
-  uint32_t nv_base_cc26x2x7_{0x000A6000};
-  uint32_t nv_size_cc26x2x7_{0x00008000};
 
   std::string role_{"Unknown"};
   bool sniffer_enabled_{true};

@@ -722,7 +722,9 @@ static inline bool bsl_read_bytes(ZigbeeSerialInterface *uart,
 // NVOCMP layout (Koenkk variant used by zigbee2mqtt routers/coordinators):
 //
 //   - Flash region is a contiguous range [nv_base .. nv_base+nv_size).
-//   - It is subdivided into 8 KB pages (NV_PAGE_SIZE=0x2000).
+//   - It is subdivided into flash pages supplied by the detected chip/firmware
+//     layout. The supported Koenkk x2 and x2x7 profiles both use 8 KiB
+//     (0x2000), but the scanner does not infer or hardcode that geometry.
 //   - Each page starts with a 4-byte page header followed by 3 compact headers,
 //     then a data area where items are appended from the end of the page down
 //     towards offset 0x0010.
@@ -800,6 +802,7 @@ struct NzgNvScanConfig
 {
   uint32_t nv_base;            // start of NV region (flash address)
   uint32_t nv_size;            // size of NV region in bytes
+  uint32_t page_size;          // NVOCMP page size selected from chip layout
   uint32_t ack_timeout_ms;     // BSL ACK phase timeout
   uint32_t header_timeout_ms;  // BSL header phase timeout
   uint32_t payload_timeout_ms; // BSL payload phase timeout
@@ -863,8 +866,18 @@ static inline void nzg_nv_scan_and_dispatch(ZigbeeSerialInterface *uart,
                                             int wanted_count,
                                             FrontendCb cb)
 {
-  const uint32_t NV_PAGE_SIZE = 0x2000u; // 8 KB pages
   const uint8_t NV_SIG = 0x96;
+
+  if (cfg.page_size < 16 || cfg.nv_size == 0 ||
+      cfg.nv_base % cfg.page_size != 0 ||
+      cfg.nv_size % cfg.page_size != 0)
+  {
+    ESP_LOGE("bsl",
+             "Invalid NV geometry: base=0x%06X size=0x%04X page=0x%04X",
+             (unsigned)cfg.nv_base, (unsigned)cfg.nv_size,
+             (unsigned)cfg.page_size);
+    return;
+  }
 
   // NVOCMP page states
   const uint8_t PST_ACT = 0x7C;  // active (head)
@@ -926,7 +939,7 @@ static inline void nzg_nv_scan_and_dispatch(ZigbeeSerialInterface *uart,
     return true;
   };
 
-  const uint32_t pages = (cfg.nv_size / NV_PAGE_SIZE);
+  const uint32_t pages = (cfg.nv_size / cfg.page_size);
   char summary[32] = {0};
   uint32_t sum_i = 0;
 
@@ -944,7 +957,7 @@ static inline void nzg_nv_scan_and_dispatch(ZigbeeSerialInterface *uart,
   // Phase 1: scan page headers and classify active pages
   for (uint32_t i = 0; i < pages; i++)
   {
-    const uint32_t pg_base = cfg.nv_base + i * NV_PAGE_SIZE;
+    const uint32_t pg_base = cfg.nv_base + i * cfg.page_size;
 
     uint8_t hdr[16] = {0};
     if (!bsl_read_words(uart,
@@ -1105,7 +1118,7 @@ static inline void nzg_nv_scan_and_dispatch(ZigbeeSerialInterface *uart,
     const uint8_t pg_idx = active[a].idx;
     const uint32_t pg_base = active[a].base;
     const uint32_t data_floor = pg_base + 16;          // after page + compact headers
-    const uint32_t data_ceil = pg_base + NV_PAGE_SIZE; // one past last byte
+    const uint32_t data_ceil = pg_base + cfg.page_size; // one past last byte
 
     ESP_LOGI("bsl", "NV scan pg%u: data region [0x%06X..0x%06X)",
              (unsigned)pg_idx, (unsigned)data_floor, (unsigned)data_ceil);
@@ -1277,7 +1290,7 @@ static inline void nzg_nv_scan_and_dispatch(ZigbeeSerialInterface *uart,
       } // end scan of this window
 
       scan_pos = window_start;
-      App.feed_wdt(); // remain cooperative; we may be scanning multiple 8 KB pages
+      App.feed_wdt(); // remain cooperative while scanning multiple NV pages
     } // end while page span
   } // end for over active pages
 
