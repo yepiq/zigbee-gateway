@@ -70,9 +70,10 @@ void ZigbeeGatewayComponent::setup() {
       [this](uart::UARTDirection direction, uint8_t byte) { this->sniff_byte_(direction, byte); });
 #endif
 
-  // Restore a clean, previously verified snapshot without touching the radio.
-  // First boot, an incompatible record, or a dirty record left by flashing
-  // takes the slower local BSL/NV/ZNP identification path before TCP starts.
+  // Restore the three independently persisted scopes without touching the
+  // radio. Only missing physical identity requires an intrusive startup BSL
+  // pass. A changed running image waits for passive observation after TCP
+  // starts; it must not cause another BSL/reset cycle after flashing.
   this->setup_metadata_cache_();
   this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
 }
@@ -392,18 +393,24 @@ void ZigbeeGatewayComponent::setup_metadata_cache_() {
   this->publish_network_information_status_(
       this->network_snapshot_available_ && this->network_snapshot_.known != 0 ? "Cached" : "Unavailable");
 
-  if (this->physical_identity_available_ && this->running_image_available_ &&
-      this->running_image_.awaiting_observation == 0) {
-    ESP_LOGI(TAG,
-             "Restored physical identity generation %u and running image generation %u; "
-             "startup radio probe skipped.",
-             (unsigned) this->physical_identity_.generation,
-             (unsigned) this->running_image_.generation);
-    this->publish_metadata_status_("Restored");
+  if (this->physical_identity_available_) {
+    if (this->running_image_available_ && this->running_image_.awaiting_observation == 0) {
+      ESP_LOGI(TAG,
+               "Restored physical identity generation %u and running image generation %u; "
+               "startup radio probe skipped.",
+               (unsigned) this->physical_identity_.generation,
+               (unsigned) this->running_image_.generation);
+      this->publish_metadata_status_("Restored");
+    } else {
+      ESP_LOGI(TAG,
+               "Restored physical identity generation %u; running image awaits passive observation.",
+               (unsigned) this->physical_identity_.generation);
+      this->publish_metadata_status_("Awaiting Observation");
+    }
     return;
   }
 
-  ESP_LOGI(TAG, "Physical identity or running image information is unavailable; running identification.");
+  ESP_LOGI(TAG, "Physical Zigbee identity is unavailable; running one-time identification.");
   this->refresh_metadata_();
 }
 
@@ -840,26 +847,20 @@ bool ZigbeeGatewayComponent::set_radio_connection_led_(bool on) {
 
 void ZigbeeGatewayComponent::on_tcp_maintenance_finished_() {
   // Transparent BSL access can replace coordinator firmware with router
-  // firmware (or vice versa) without the ESP32 observing the image. A BSL
-  // session marked only the mutable running-image record before pin takeover;
-  // identify the resulting image locally before admitting the next normal TCP
-  // owner. Physical identity remains valid for the lifetime of the radio.
+  // firmware (or vice versa) without the ESP32 observing the image. The BSL
+  // session marked only the mutable running-image record before pin takeover.
+  // Do not re-enter BSL or scan NV now: admit the next normal TCP owner and
+  // learn the resulting image/network from its ordinary ZNP startup traffic.
+  // Physical identity remains valid for the lifetime of the soldered radio.
   this->sniffer_enabled_ = true;
   if (!this->running_image_available_ || this->running_image_.awaiting_observation == 0) {
     ESP_LOGI(TAG, "Maintenance transport ended without a pending running-image change.");
     return;
   }
-  if (!this->serial_.claim(ZigbeeSerialInterface::Owner::LOCAL)) {
-    ESP_LOGE(TAG, "Could not claim UART for post-maintenance metadata refresh.");
-    this->publish_metadata_status_("Awaiting Observation");
-    return;
-  }
-
-  ESP_LOGI(TAG, "Maintenance transport ended; identifying the resulting Zigbee firmware.");
-  this->operation_active_ = true;
-  this->refresh_metadata_();
-  this->operation_active_ = false;
-  this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
+  ESP_LOGI(TAG, "Maintenance transport ended; running image awaits passive ZNP observation.");
+  this->publish_metadata_status_("Awaiting Observation");
+  this->publish_network_information_status_(
+      this->network_snapshot_.known != 0 ? "Cached" : "Unavailable");
 }
 
 void ZigbeeGatewayComponent::get_device_info_() {

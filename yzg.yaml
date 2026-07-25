@@ -69,7 +69,7 @@ esphome:
   name_add_mac_suffix: false
   project:
     name: yepiq.Zigbee_Gateway
-    version: '1.99b'
+    version: '2.00b'
 
 esp32:
   board: esp32dev

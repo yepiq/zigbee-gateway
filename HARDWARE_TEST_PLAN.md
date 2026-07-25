@@ -107,15 +107,17 @@ maintenance window and a recovery method.
   identifies BSL/NV/ZNP information, resets the radio, saves the next clean
   generation, reports `Verified`, and releases UART for the next TCP client.
 
-### CACHE-04 — BSL maintenance refreshes before normal reconnect
+### CACHE-04 — BSL maintenance defers refresh to normal traffic
 
 - Status: `NOT RUN`
 - Procedure: Perform any successful remote BSL session, note metadata status
   and logs, close the maintenance connection, and let Zigbee2MQTT reconnect.
-- Expected: The record is committed dirty immediately before BSL pin entry;
-  old values remain visible as stale during maintenance; after the maintenance
-  socket closes, local identification saves the new clean snapshot before the
-  returning normal TCP client obtains UART.
+- Expected: The running-image record is committed pending immediately before BSL pin entry;
+  physical identity remains valid and old network values remain `Cached`
+  during maintenance. After the maintenance socket closes, the gateway does
+  not re-enter BSL, scan NV, or delay the returning normal TCP client; running
+  image status remains `Awaiting Observation` until normal ZNP startup traffic
+  identifies it.
 
 ### CACHE-05 — Interrupted maintenance survives an ESP32 reboot
 
@@ -123,18 +125,20 @@ maintenance window and a recovery method.
 - Procedure: Enter BSL through the TCP maintenance workflow without erasing or
   writing the radio, then power-cycle the whole gateway before completing the
   session.
-- Expected: The persisted dirty marker prevents a fast restore; boot performs a
-  full identification, resets the still-valid radio firmware, saves a clean
-  snapshot, and only then starts normal TCP service.
+- Expected: The persisted running-image marker survives, but the valid physical
+  identity still permits a fast boot. Power-on returns the radio to its
+  application; ESPHome does not enter BSL or scan NV and starts normal TCP with
+  image status `Awaiting Observation`.
 
 ### CACHE-06 — Failed refresh retains last-known values
 
 - Status: `NOT RUN`
 - Procedure: With a known clean record and Zigbee2MQTT stopped, temporarily
   force BSL synchronization to fail, then invoke Refresh Zigbee Information.
-- Expected: The clean record is first marked dirty; the failed candidate never
-  replaces it; previous values remain published; status is `Stale`; the next
-  boot retries identification.
+- Expected: Physical identity is never invalidated. The failed candidate never
+  replaces the running-image or network records; previous values remain
+  published as last-known, image status is `Awaiting Observation`, and network
+  status remains `Cached`. A later normal client may refresh them passively.
 
 ### CACHE-07 — Manual refresh cannot preempt a TCP client
 
@@ -331,9 +335,9 @@ category.
 - Status: `NOT RUN`
 - Procedure: Abort the flasher after entering BSL but before its normal reset.
 - Expected: Maintenance disconnect triggers a hardware recovery reset, the
-  parked socket is closed afterward, metadata remains dirty until local
-  identification succeeds, and Zigbee2MQTT can reconnect to whatever valid
-  radio image remains.
+  parked socket is closed afterward, running-image information remains pending
+  without an automatic BSL/NV pass, and Zigbee2MQTT can reconnect immediately
+  to whatever valid radio image remains.
 
 ### MNT-08 — BSL rendezvous timeout
 
@@ -341,7 +345,8 @@ category.
 - Procedure: With no active client, send `/cmdZigBSL` but do not connect a
   flashing socket for more than 30 seconds.
 - Expected: The rendezvous expires, the ESP32 resets the radio out of BSL, and
-  the dirty metadata snapshot is locally refreshed before normal TCP resumes.
+  normal TCP resumes without a second BSL/NV pass. Physical identity remains
+  valid while running-image information awaits passive observation.
 
 ### MNT-09 — Parked-client safety limit
 
