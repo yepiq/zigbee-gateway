@@ -46,5 +46,20 @@ inline bool zigbee_transport_uses_direct_pin(ZigbeeTransportMode mode) {
   return mode == ZigbeeTransportMode::USB_DIRECT;
 }
 
+/// Status to publish when metadata is restored or external access removes the
+/// ESP32 from the serial path. A pending image always takes precedence: USB
+/// Direct must not make potentially replaced image values look merely cached.
+inline const char *zigbee_restored_metadata_status(
+    ZigbeeTransportMode mode, bool physical_identity_available,
+    bool running_image_available, bool awaiting_observation) {
+  if (running_image_available && awaiting_observation)
+    return "Awaiting Observation";
+  if (!physical_identity_available)
+    return "Unavailable";
+  if (!running_image_available)
+    return "Awaiting Observation";
+  return mode == ZigbeeTransportMode::USB_DIRECT ? "Cached" : "Restored";
+}
+
 }  // namespace zigbee_gateway
 }  // namespace esphome

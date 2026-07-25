@@ -146,7 +146,10 @@ In USB Bridged, the ESP32 remains in the serial path and continues to control
 the Zigbee reset and BSL pins. Entering BSL changes both the radio UART and the
 CH340-facing UART to 500000 baud, matching XZG. Resetting the Zigbee radio
 restores both configured normal baud rates. USB Direct keeps reset and BSL
-controls available but routes serial bytes around the ESP32.
+controls available but routes serial bytes around the ESP32. Selecting USB
+Direct retains all last-known values, changes mutable image and network
+provenance to `Cached`, and preserves `Awaiting Observation` if BSL has already
+marked the running image pending. Physical identity is never invalidated.
 
 Manual Zigbee information refresh is rejected in either USB mode. The gateway
 cannot know whether a USB host is active and therefore cannot safely preempt
@@ -213,6 +216,9 @@ idle, and is not part of normal metadata collection.
 `Zigbee Metadata Status` describes physical/running-image information:
 
 - `Restored`: valid cached information was published without touching UART.
+- `Cached`: the physical identity remains valid and last-known running-image
+  values remain visible, but USB Direct has removed the ESP32 from the serial
+  path.
 - `Refreshing`: an explicit local identification pass is running.
 - `Verified`: an explicit local identification pass completed.
 - `Observed`: the running image was identified from normal ZNP traffic.

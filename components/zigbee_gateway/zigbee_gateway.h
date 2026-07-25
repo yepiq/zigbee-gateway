@@ -184,6 +184,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void publish_network_snapshot_(const NetworkSnapshotCache &cache);
   void publish_metadata_status_(const char *status);
   void publish_network_information_status_(const char *status);
+  void publish_direct_metadata_provenance_();
 
   bool detect_chip_info_(ChipInfo *chip);
   bool read_memory_word_(uint32_t address, const char *name, uint8_t out[4]);

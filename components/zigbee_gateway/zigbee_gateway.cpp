@@ -246,6 +246,12 @@ bool ZigbeeGatewayComponent::apply_transport_mode_(ZigbeeTransportMode mode) {
   if (mode == this->transport_mode_)
     return true;
 
+#ifdef USE_UART_DEBUGGER
+  // Preserve observations already completed by the old stream owner before
+  // changing how their provenance is presented in the new transport.
+  this->process_znp_observations_();
+#endif
+
   ESP_LOGI(TAG, "Changing Zigbee serial transport from %s to %s",
            zigbee_transport_mode_name(this->transport_mode_),
            zigbee_transport_mode_name(mode));
@@ -280,6 +286,8 @@ bool ZigbeeGatewayComponent::apply_transport_mode_(ZigbeeTransportMode mode) {
 
   // TCP listener startup remains in loop(), where network readiness and retry
   // backoff are already handled. USB Direct intentionally owns no ESP UART.
+  if (mode == ZigbeeTransportMode::USB_DIRECT)
+    this->publish_direct_metadata_provenance_();
   return true;
 }
 
@@ -465,6 +473,23 @@ void ZigbeeGatewayComponent::publish_network_information_status_(const char *sta
     this->network_information_status_text_sensor_->publish_state(status);
 }
 
+void ZigbeeGatewayComponent::publish_direct_metadata_provenance_() {
+  // GPIO33 has routed the transparent stream around the ESP32. Keep every
+  // last-known value visible, but no longer describe mutable image/network
+  // information as observed or verified while the component cannot see it.
+  // Physical identity remains a lifetime property and is never invalidated.
+  this->network_observed_this_boot_ = false;
+  this->publish_metadata_status_(zigbee_restored_metadata_status(
+      this->transport_mode_, this->physical_identity_available_,
+      this->running_image_available_,
+      this->running_image_available_ &&
+          this->running_image_.awaiting_observation != 0));
+  this->publish_network_information_status_(
+      this->network_snapshot_available_ && this->network_snapshot_.known != 0
+          ? "Cached"
+          : "Unavailable");
+}
+
 void ZigbeeGatewayComponent::publish_physical_identity_(const PhysicalIdentityCache &cache) {
   this->publish_hardware_(
       (cache.known & PHYSICAL_IDENTITY_HARDWARE) != 0 ? cache.hardware : "Unknown");
@@ -619,13 +644,16 @@ void ZigbeeGatewayComponent::setup_metadata_cache_() {
                "startup radio probe skipped.",
                (unsigned) this->physical_identity_.generation,
                (unsigned) this->running_image_.generation);
-      this->publish_metadata_status_("Restored");
     } else {
       ESP_LOGI(TAG,
                "Restored physical identity generation %u; running image awaits passive observation.",
                (unsigned) this->physical_identity_.generation);
-      this->publish_metadata_status_("Awaiting Observation");
     }
+    this->publish_metadata_status_(zigbee_restored_metadata_status(
+        this->transport_mode_, this->physical_identity_available_,
+        this->running_image_available_,
+        this->running_image_available_ &&
+            this->running_image_.awaiting_observation != 0));
     return;
   }
 
@@ -634,7 +662,11 @@ void ZigbeeGatewayComponent::setup_metadata_cache_() {
              "Physical Zigbee identity is unavailable, but %s is selected; "
              "startup identification is deferred until an explicit refresh in TCP mode.",
              zigbee_transport_mode_name(this->transport_mode_));
-    this->publish_metadata_status_("Unavailable");
+    this->publish_metadata_status_(zigbee_restored_metadata_status(
+        this->transport_mode_, this->physical_identity_available_,
+        this->running_image_available_,
+        this->running_image_available_ &&
+            this->running_image_.awaiting_observation != 0));
     return;
   }
 

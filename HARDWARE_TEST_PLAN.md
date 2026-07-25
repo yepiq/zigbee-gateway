@@ -474,6 +474,17 @@ category.
   already-forwarded valid frames. USB Direct produces no ESP32 observation and
   does not fabricate a refresh.
 
+### USB-09 — USB Direct metadata provenance
+
+- Status: `NOT RUN`
+- Procedure: First obtain `Observed` running-image and network information over
+  TCP, then select USB Direct. Repeat after entering BSL so the running image is
+  pending, and reboot once with USB Direct persisted.
+- Expected: Last-known values remain visible and physical identity remains
+  unchanged. Ordinary USB Direct entry reports Metadata Status `Cached` and
+  Network Information Status `Cached`; a pending running image remains
+  `Awaiting Observation`. A missing cache remains `Unavailable`.
+
 ## Maintenance rendezvous and UART exclusion
 
 ### MNT-01 — Legacy command-first flashing with Zigbee2MQTT active
