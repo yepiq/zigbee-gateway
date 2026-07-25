@@ -12,6 +12,8 @@
 #include "esphome/components/text_sensor/text_sensor.h"
 
 #include "zigbee_serial.h"
+#include "zigbee_stream_adapters.h"
+#include "zigbee_stream_pump.h"
 #include "zigbee_tcp_state.h"
 
 namespace esphome {
@@ -34,7 +36,10 @@ class ZigbeeGatewayComponent;
 class ZigbeeTcpServer {
  public:
   void set_parent(ZigbeeGatewayComponent *parent) { this->parent_ = parent; }
-  void set_serial(ZigbeeSerialInterface *serial) { this->serial_ = serial; }
+  void set_serial(ZigbeeSerialInterface *serial) {
+    this->serial_ = serial;
+    this->radio_endpoint_.set_serial(serial);
+  }
   void set_port(uint16_t port) { this->port_ = port; }
   void set_pending_timeout(uint32_t timeout_ms) { this->pending_timeout_ms_ = timeout_ms; }
   void set_park_timeout(uint32_t timeout_ms) { this->park_timeout_ms_ = timeout_ms; }
@@ -68,7 +73,6 @@ class ZigbeeTcpServer {
   };
 
   static constexpr size_t PREBUFFER_SIZE = 512;
-  static constexpr size_t UART_BUFFER_SIZE = 1024;
   static constexpr size_t IO_CHUNK_SIZE = 256;
   static constexpr size_t LOOP_IO_BUDGET = 1024;
 
@@ -94,8 +98,6 @@ class ZigbeeTcpServer {
   bool collect_prebuffer_(Client &client);
   void classify_active_();
   void pump_active_();
-  void pump_tcp_to_uart_();
-  void pump_uart_to_tcp_();
   void drain_parked_();
 
   void start_bsl_rendezvous_timer_();
@@ -105,7 +107,7 @@ class ZigbeeTcpServer {
   void handle_active_disconnect_();
   void promote_pending_after_normal_disconnect_();
   void finish_maintenance_(bool recover_radio);
-  void clear_uart_output_();
+  void clear_stream_buffers_();
   void publish_sensors_();
 
   ZigbeeGatewayComponent *parent_{nullptr};
@@ -125,9 +127,9 @@ class ZigbeeTcpServer {
   uint32_t bsl_armed_at_{0};
   uint32_t parked_at_{0};
 
-  std::array<uint8_t, UART_BUFFER_SIZE> uart_buffer_{};
-  size_t uart_buffer_offset_{0};
-  size_t uart_buffer_length_{0};
+  ZigbeeSocketStreamEndpoint socket_endpoint_{};
+  ZigbeeRadioStreamEndpoint radio_endpoint_{};
+  ZigbeeStreamPump stream_pump_{};
 
   binary_sensor::BinarySensor *connected_sensor_{nullptr};
   sensor::Sensor *connection_count_sensor_{nullptr};

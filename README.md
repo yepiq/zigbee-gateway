@@ -1,8 +1,9 @@
 # Yepiq Zigbee Gateway
 
 ESPHome firmware for the ZigStar UZG-01 that exposes its TI Zigbee radio as an
-exclusive TCP serial adapter while retaining local diagnostics, Home Assistant
-entities, and remote radio-firmware maintenance.
+exclusive TCP, software-bridged USB, or direct USB serial adapter while
+retaining local diagnostics, Home Assistant entities, and remote
+radio-firmware maintenance.
 
 The current source compiles with ESPHome 2026.7.2. The component and its host
 tests are implemented, but the refactored UART and maintenance paths have not
@@ -30,7 +31,9 @@ UART-ownership model are project-specific additions.
 - Passive observation of ordinary ZNP responses without consuming, delaying,
   or changing the client byte stream.
 - Home Assistant controls and transport diagnostics.
-- USB/TCP serial-path selection using the UZG-01 hardware switch.
+- One persisted `TCP` / `USB Bridged` / `USB Direct` transport selector.
+- A shared buffered duplex pump used by both TCP and USB Bridged.
+- GPIO33 direct USB bypass with TCP and software bridging shut down.
 
 The former `esphome-stream-server` dependency is no longer used.
 
@@ -42,10 +45,12 @@ The working configuration in [`yzg.yaml`](yzg.yaml) targets the UZG-01:
 | --- | --- | --- |
 | Zigbee UART RX | GPIO36 | 115200 baud by default |
 | Zigbee UART TX | GPIO4 | 115200 baud by default |
+| USB UART RX | GPIO3 | CH340-facing ESP32 UART0 |
+| USB UART TX | GPIO1 | CH340-facing ESP32 UART0 |
 | Zigbee reset | GPIO16 | Inverted |
 | Zigbee BSL/rejoin | GPIO32 | Inverted |
-| USB/TCP serial selector | GPIO33 | `ON` selects USB serial |
-| Mode button | GPIO35 | Toggles the serial selector |
+| Direct USB selector | GPIO33 | `ON` connects CH340 directly to the radio |
+| Mode button | GPIO35 | Cycles the three transport modes |
 | Red mode LED | GPIO12 | Strapping pin |
 | Blue power LED | GPIO14 | Always on in the current configuration |
 | LAN8720 MDC | GPIO23 |  |
@@ -53,10 +58,15 @@ The working configuration in [`yzg.yaml`](yzg.yaml) targets the UZG-01:
 | LAN8720 clock | GPIO17 | Clock output |
 | LAN8720 power | GPIO5 | Strapping pin |
 
-Board wiring, UART baud rate, TCP port, and TCP session-policy timeouts are
-declared as substitutions at the start of `yzg.yaml`. ZNP/BSL parser timing and
-the supported chip/storage layouts are implementation policy in the component,
-not per-device YAML settings.
+Board wiring, UART baud rate and receive-buffer size, TCP port, and TCP
+session-policy timeouts are declared as substitutions at the start of
+`yzg.yaml`. The larger UART receive buffers provide headroom for the 500000-baud
+USB flashing path. ZNP/BSL parser timing and the supported chip/storage layouts
+are implementation policy in the component, not per-device YAML settings.
+
+ESPHome serial logging is deliberately disabled with `logger.baud_rate: 0`.
+UART0 is the USB Bridged data endpoint; enabling the serial logger would inject
+log text into the Zigbee stream and corrupt it.
 
 The detected chip family selects both forms of storage geometry independently:
 
@@ -77,7 +87,7 @@ transport over a particular medium.
 | Indicator | Original UZG behavior | XZG reference behavior | Current project behavior |
 | --- | --- | --- | --- |
 | Blue power LED | Constant while powered | Blinks without a network TCP client; constant with one | Constant while powered |
-| Red mode LED | On for USB serial; off for Ethernet serial | On for USB, off for network, with additional status patterns | On for **USB**; off for **TCP** |
+| Red mode LED | On for USB serial; off for Ethernet serial | On for USB, off for network, with additional status patterns | On for **USB Bridged** or **USB Direct**; off for **TCP** |
 | Yellow/white Zigbee LED | On after Zigbee2MQTT connects | Controlled through the Zigbee radio | Radio `LED1` is turned on at normal TCP-session admission and off at disconnect |
 
 The yellow/white indicator is connected to the Zigbee radio, not an ESP32 GPIO.
@@ -98,6 +108,7 @@ Every consuming UART read and every UART write goes through one
 | Local | Chip identification, explicit diagnostics, reset handling, and the radio connection LED |
 | TCP normal | Transparent Zigbee2MQTT or other ZNP traffic |
 | TCP maintenance | Transparent BSL/flashing-tool traffic |
+| USB bridge | Transparent CH340-facing UART0 traffic |
 
 Local work has priority at startup and at explicitly protected session
 boundaries. While local code owns the UART, the TCP server does not classify new
@@ -105,9 +116,41 @@ clients or touch active sockets. A manual information refresh does not preempt a
 live TCP owner; it is rejected and can be retried after the client disconnects.
 
 Passive ZNP observation is not another owner. The UART debugger sees bytes that
-have already passed through the normal transparent stream, validates complete
-UNPI frames, and queues recognized information for later publication. It never
-sends a query or consumes a response.
+have already passed through a normal TCP or USB Bridged stream, validates
+complete UNPI frames, and queues recognized information for later publication.
+It never sends a query or consumes a response. USB Direct physically bypasses
+the ESP32, so no passive observation is possible in that mode.
+
+## Serial transport modes
+
+The single **Zigbee Serial Transport** selector maps directly to three mutually
+exclusive runtime states:
+
+| Option | GPIO33 | ESP32 stream owner | TCP listener |
+| --- | --- | --- | --- |
+| `TCP` | Low: radio connected to ESP32 | TCP normal or maintenance | Enabled |
+| `USB Bridged` | Low: radio connected to ESP32 | USB bridge | Disabled |
+| `USB Direct` | High: CH340 connected directly to radio | None | Disabled |
+
+The physical mode button cycles the same three options. The saved selection is
+restored before the gateway decides whether a missing physical-identity cache
+may be probed, so booting into either USB mode never triggers an intrusive
+local UART transaction.
+
+TCP and USB Bridged use the same buffered, bidirectional stream pump. Its two
+independent retained buffers handle partial non-blocking writes without
+duplicating forwarding logic. `ZigbeeSerialInterface` still arbitrates the
+radio side, so both transports cannot run in parallel.
+
+In USB Bridged, the ESP32 remains in the serial path and continues to control
+the Zigbee reset and BSL pins. Entering BSL changes both the radio UART and the
+CH340-facing UART to 500000 baud, matching XZG. Resetting the Zigbee radio
+restores both configured normal baud rates. USB Direct keeps reset and BSL
+controls available but routes serial bytes around the ESP32.
+
+Manual Zigbee information refresh is rejected in either USB mode. The gateway
+cannot know whether a USB host is active and therefore cannot safely preempt
+it with local ZNP/BSL queries.
 
 ## TCP and maintenance behavior
 
@@ -196,8 +239,8 @@ The example configuration exposes:
   rejected connections, pending timeouts, maintenance sessions, and recovery
   resets.
 - Controls: restart Zigbee, enter BSL, router rejoin, temporary manual
-  information refresh, and the **TCP** / **USB** options of the
-  **Zigbee Serial Transport** selector.
+  information refresh, and the **TCP** / **USB Bridged** / **USB Direct**
+  options of the **Zigbee Serial Transport** selector.
 
 Transport counters, cache provenance, and connection topology are diagnostic
 entities.
@@ -226,6 +269,12 @@ c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_znp_observer_test.cpp -o
 
 c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_chip_layout_test.cpp -o /tmp/zigbee_chip_layout_test
 /tmp/zigbee_chip_layout_test
+
+c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_stream_pump_test.cpp -o /tmp/zigbee_stream_pump_test
+/tmp/zigbee_stream_pump_test
+
+c++ -std=c++17 -Wall -Wextra -pedantic -I. tests/zigbee_transport_mode_test.cpp -o /tmp/zigbee_transport_mode_test
+/tmp/zigbee_transport_mode_test
 ```
 
 The host tests validate deterministic state and parser logic. They do not
@@ -239,9 +288,18 @@ legacy/current flashing-tool interoperability and Zigbee2MQTT recovery.
   UART arbitration, TCP transport, protocols, caches, and passive observer.
 - [`components/zigbee_gateway/zigbee_chip_layout.h`](components/zigbee_gateway/zigbee_chip_layout.h):
   detected-family flash and NVOCMP geometry.
+- [`components/zigbee_gateway/zigbee_stream_pump.h`](components/zigbee_gateway/zigbee_stream_pump.h):
+  transport-neutral buffered duplex forwarding.
 - [`tests`](tests): dependency-free host tests.
 - [`HARDWARE_TEST_PLAN.md`](HARDWARE_TEST_PLAN.md): durable bench checklist and
   deferred feature tests.
+
+## Deferred features
+
+- First-class Zigbee radio firmware flashing owned by the ESP32, including
+  erase/write/verify/reset, progress reporting, and recovery.
+- Protocol-aware TCP preemption at a proven ZNP transaction boundary.
+- Additional meaningful LED patterns and global/night-time LED suppression.
 
 ## License
 

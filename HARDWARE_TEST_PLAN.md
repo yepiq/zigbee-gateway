@@ -79,6 +79,16 @@ maintenance window and a recovery method.
   toggling the radio pins, and Zigbee2MQTT reconnects without radio network
   loss.
 
+### BAS-05 — USB-mode boot does not probe an uncached radio
+
+- Status: `NOT RUN`
+- Procedure: Clear or invalidate the physical-identity cache, save `USB
+  Bridged`, reboot, then repeat with `USB Direct`.
+- Expected: The selected GPIO33 path is applied before metadata setup. Neither
+  USB mode enters BSL, sends a local ZNP request, or consumes USB/radio bytes.
+  Metadata Status reports `Unavailable` until an explicit refresh is run in
+  idle TCP mode.
+
 ## Chip and storage geometry
 
 Run `tests/zigbee_chip_layout_test.cpp` after every change to chip-family
@@ -273,6 +283,30 @@ The suite also covers the armed-owner-disconnect edge case: if the normal owner
 leaves while BSL rendezvous is armed, the next maintenance socket must trigger
 the deferred BSL entry rather than receiving an application-mode UART.
 
+## Host stream and mode tests
+
+Run `tests/zigbee_stream_pump_test.cpp` and
+`tests/zigbee_transport_mode_test.cpp` after every change to common byte
+forwarding, endpoint flow control, transport option ordering, or GPIO33 mode
+mapping.
+
+### STR-01 — Shared duplex stream pump
+
+- Status: `PASS`
+- Procedure: Compile and run `tests/zigbee_stream_pump_test.cpp`.
+- Expected: The deterministic suite covers bidirectional forwarding, retained
+  data across partial and temporarily blocked writes, quarantined TCP
+  prebuffer injection and buffer reset, and left/right closure and error
+  reporting.
+
+### MOD-01 — Three-mode mapping
+
+- Status: `PASS`
+- Procedure: Compile and run `tests/zigbee_transport_mode_test.cpp`.
+- Expected: The deterministic suite covers the exact `TCP`, `USB Bridged`, and
+  `USB Direct` option ordering plus TCP-listener, software-bridge, and
+  direct-GPIO mode mapping.
+
 ## Transport diagnostics
 
 All entities in this section must appear in Home Assistant under the diagnostic
@@ -363,6 +397,82 @@ category.
   response latency.
 - Expected: No corruption, unexplained reconnect loop, watchdog reset, or
   growing memory/resource loss.
+
+## USB serial transports
+
+### USB-01 — TCP to USB Bridged transition
+
+- Status: `NOT RUN`
+- Procedure: With Zigbee2MQTT connected over TCP, select `USB Bridged` and
+  connect a USB serial client at 115200 baud.
+- Expected: The TCP listener and all TCP sockets close before the USB bridge
+  claims the radio UART. GPIO33 remains low, the red mode LED turns on, and
+  USB-to-radio traffic becomes usable without an ESP32 reboot.
+
+### USB-02 — USB Bridged transparent traffic
+
+- Status: `NOT RUN`
+- Procedure: Run Zigbee2MQTT or a ZNP exerciser through the UZG-01 USB serial
+  device for at least 24 hours with ordinary bidirectional network activity.
+- Expected: The shared duplex pump preserves every byte in both directions,
+  including under bursts and partial host reads. There is no logger text,
+  corruption, watchdog reset, or growing resource loss.
+
+### USB-03 — USB Bridged exclusivity
+
+- Status: `NOT RUN`
+- Procedure: While USB Bridged is actively carrying ZNP traffic, attempt to
+  connect TCP port 6638 and invoke Refresh Zigbee Information.
+- Expected: TCP is not listening. Manual local refresh is rejected because USB
+  host activity cannot be detected. Only the `USB_BRIDGE` owner can consume or
+  write the radio UART.
+
+### USB-04 — USB Direct hardware bypass
+
+- Status: `NOT RUN`
+- Procedure: Select `USB Direct`, verify GPIO33 electrically, then run a USB
+  serial ZNP session while monitoring ESP32 UART activity and TCP port 6638.
+- Expected: GPIO33 is high, the CH340 is physically connected to the Zigbee
+  radio, the red mode LED is on, TCP is not listening, and the ESP32 neither
+  reads nor writes the transparent stream.
+
+### USB-05 — Mode cycling and persistence
+
+- Status: `NOT RUN`
+- Procedure: Cycle the physical mode button through all three options, reboot
+  in each option, and repeat changes from Home Assistant.
+- Expected: The order is `TCP`, `USB Bridged`, `USB Direct`. The selector,
+  GPIO33, red LED, TCP listener, and software bridge agree after every change
+  and reboot; there is never more than one external stream owner.
+
+### USB-06 — USB Bridged BSL and reset baud changes
+
+- Status: `NOT RUN`
+- Procedure: In USB Bridged at 115200 baud, invoke Zigbee BSL Mode and flash or
+  query the bootloader using the XZG-compatible 500000-baud workflow. Then
+  invoke Restart Zigbee and continue with application ZNP at 115200.
+- Expected: BSL entry changes both ESP32 UARTs to 500000 only after the bridge
+  is the exclusive owner. Reset does not consume the radio's reset indication
+  and restores the radio and CH340-facing UARTs to their configured normal
+  baud rates.
+
+### USB-07 — USB Direct reset and BSL control
+
+- Status: `NOT RUN`
+- Procedure: In USB Direct, use the ESPHome BSL and restart controls while a
+  USB maintenance tool owns the direct serial path.
+- Expected: The ESP32 keeps control of the radio BSL/reset pins without
+  touching serial bytes. The external tool receives the bootloader and reset
+  traffic directly through the CH340 path.
+
+### USB-08 — Passive observation in USB Bridged only
+
+- Status: `NOT RUN`
+- Procedure: Exchange recognized `SYS_VERSION`, `UTIL_GET_DEVICE_INFO`, and
+  network-information frames first through USB Bridged and then USB Direct.
+- Expected: USB Bridged passively updates applicable cached information from
+  already-forwarded valid frames. USB Direct produces no ESP32 observation and
+  does not fabricate a refresh.
 
 ## Maintenance rendezvous and UART exclusion
 
@@ -495,11 +605,11 @@ category.
 ### HW-01 — Zigbee serial transport and red LED
 
 - Status: `NOT RUN`
-- Procedure: Toggle between `TCP` and `USB` in the `Zigbee Serial Transport`
-  selector and with the physical button.
-- Expected: GPIO33 selects the intended serial path; the red mode LED preserves
-  the original UZG-01 allocation and matches the selected transport; the
-  selection survives reboot according to the configured restore behavior.
+- Procedure: Cycle `TCP`, `USB Bridged`, and `USB Direct` in the `Zigbee Serial
+  Transport` selector and with the physical button.
+- Expected: GPIO33 is low for TCP and USB Bridged, high only for USB Direct.
+  The red mode LED preserves the original UZG-01 allocation by remaining off
+  for TCP and on for both USB choices. The selection survives reboot.
 
 ### HW-02 — Blue power LED
 

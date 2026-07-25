@@ -1,6 +1,6 @@
 from esphome import pins
 import esphome.codegen as cg
-from esphome.components import binary_sensor, button, sensor, text_sensor, uart
+from esphome.components import binary_sensor, button, select, sensor, text_sensor, uart
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ID,
@@ -20,7 +20,7 @@ from esphome.const import (
 
 CODEOWNERS = ["@yepiq"]
 DEPENDENCIES = ["network", "uart"]
-AUTO_LOAD = ["binary_sensor", "button", "sensor", "socket", "text_sensor"]
+AUTO_LOAD = ["binary_sensor", "button", "select", "sensor", "socket", "text_sensor"]
 
 CONF_SOCKET_CONNECTED = "socket_connected"
 CONF_CONNECTION_COUNT = "connection_count"
@@ -33,6 +33,10 @@ CONF_PENDING_TIMEOUTS = "pending_timeouts"
 CONF_MAINTENANCE_SESSIONS = "maintenance_sessions"
 CONF_RECOVERY_RESETS = "recovery_resets"
 CONF_BSL_PIN = "bsl_pin"
+CONF_MODE_PIN = "mode_pin"
+CONF_MODE_LED_PIN = "mode_led_pin"
+CONF_USB_UART_ID = "usb_uart_id"
+CONF_SERIAL_TRANSPORT = "serial_transport"
 CONF_IP_ADDRESS = "ip_address"
 CONF_TCP_PORT = "tcp_port"
 CONF_PENDING_SOCKET_TIMEOUT = "pending_socket_timeout"
@@ -77,6 +81,12 @@ RadioMetadataRefreshButton = zigbee_gateway_ns.class_(
     button.Button,
     cg.Parented.template(ZigbeeGatewayComponent),
 )
+ZigbeeTransportSelect = zigbee_gateway_ns.class_(
+    "ZigbeeTransportSelect",
+    select.Select,
+    cg.Component,
+    cg.Parented.template(ZigbeeGatewayComponent),
+)
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
@@ -84,6 +94,14 @@ CONFIG_SCHEMA = cv.All(
             cv.GenerateID(): cv.declare_id(ZigbeeGatewayComponent),
             cv.Required(CONF_RESET_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_BSL_PIN): pins.gpio_output_pin_schema,
+            cv.Required(CONF_MODE_PIN): pins.gpio_output_pin_schema,
+            cv.Required(CONF_MODE_LED_PIN): pins.gpio_output_pin_schema,
+            cv.Required(CONF_USB_UART_ID): cv.use_id(uart.UARTComponent),
+            cv.Required(CONF_SERIAL_TRANSPORT): select.select_schema(
+                ZigbeeTransportSelect,
+                entity_category=ENTITY_CATEGORY_CONFIG,
+                icon="mdi:swap-horizontal",
+            ),
             cv.Required(CONF_SOCKET_CONNECTED): binary_sensor.binary_sensor_schema(
                 device_class=DEVICE_CLASS_CONNECTIVITY,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
@@ -235,6 +253,21 @@ async def to_code(config):
 
     cg.add(var.set_reset_pin(await cg.gpio_pin_expression(config[CONF_RESET_PIN])))
     cg.add(var.set_bsl_pin(await cg.gpio_pin_expression(config[CONF_BSL_PIN])))
+    cg.add(var.set_mode_pin(await cg.gpio_pin_expression(config[CONF_MODE_PIN])))
+    cg.add(
+        var.set_mode_led_pin(
+            await cg.gpio_pin_expression(config[CONF_MODE_LED_PIN])
+        )
+    )
+    cg.add(var.set_usb_uart(await cg.get_variable(config[CONF_USB_UART_ID])))
+
+    transport = await select.new_select(
+        config[CONF_SERIAL_TRANSPORT],
+        options=["TCP", "USB Bridged", "USB Direct"],
+    )
+    await cg.register_component(transport, config[CONF_SERIAL_TRANSPORT])
+    await cg.register_parented(transport, config[CONF_ID])
+
     socket_connected = await binary_sensor.new_binary_sensor(
         config[CONF_SOCKET_CONNECTED]
     )

@@ -9,6 +9,7 @@
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/button/button.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/select/select.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/preferences.h"
@@ -17,6 +18,8 @@
 #include "zigbee_chip_layout.h"
 #include "zigbee_metadata_cache.h"
 #include "zigbee_tcp_server.h"
+#include "zigbee_transport_mode.h"
+#include "zigbee_usb_bridge.h"
 #include "zigbee_znp_observer.h"
 
 namespace esphome {
@@ -26,6 +29,9 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
  public:
   void set_reset_pin(GPIOPin *pin) { this->reset_pin_ = pin; }
   void set_bsl_pin(GPIOPin *pin) { this->bsl_pin_ = pin; }
+  void set_mode_pin(GPIOPin *pin) { this->mode_pin_ = pin; }
+  void set_mode_led_pin(GPIOPin *pin) { this->mode_led_pin_ = pin; }
+  void set_usb_uart(uart::UARTComponent *uart) { this->usb_uart_ = uart; }
   void set_socket_connected_binary_sensor(binary_sensor::BinarySensor *sensor) {
     this->socket_connected_binary_sensor_ = sensor;
     this->tcp_server_.set_connected_sensor(sensor);
@@ -107,6 +113,9 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void request_bsl();
   void request_router_rejoin();
   void request_metadata_refresh();
+  void request_transport_mode(ZigbeeTransportMode mode) {
+    this->requested_transport_mode_ = mode;
+  }
 
  protected:
   struct ChipInfo {
@@ -158,6 +167,10 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void on_tcp_normal_session_finished_();
   void on_tcp_maintenance_finished_();
   bool set_radio_connection_led_(bool on);
+  bool apply_transport_mode_(ZigbeeTransportMode mode);
+  void configure_usb_bridge_baud_(uint32_t baud_rate);
+  void restore_normal_uart_bauds_();
+  bool local_uart_access_allowed_(const char *operation) const;
 
   void setup_metadata_cache_();
   bool refresh_metadata_();
@@ -206,6 +219,9 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
 
   GPIOPin *reset_pin_{nullptr};
   GPIOPin *bsl_pin_{nullptr};
+  GPIOPin *mode_pin_{nullptr};
+  GPIOPin *mode_led_pin_{nullptr};
+  uart::UARTComponent *usb_uart_{nullptr};
   binary_sensor::BinarySensor *socket_connected_binary_sensor_{nullptr};
   sensor::Sensor *connection_count_sensor_{nullptr};
   text_sensor::TextSensor *ip_address_text_sensor_{nullptr};
@@ -229,9 +245,14 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   uint16_t tcp_port_{6638};
   uint32_t pending_socket_timeout_ms_{30000};
   uint32_t parked_socket_timeout_ms_{600000};
+  uint32_t normal_radio_baud_rate_{115200};
+  uint32_t normal_usb_baud_rate_{115200};
 
   std::string role_{"Unknown"};
+  ZigbeeTransportMode transport_mode_{ZigbeeTransportMode::TCP};
+  ZigbeeTransportMode requested_transport_mode_{ZigbeeTransportMode::TCP};
   bool sniffer_enabled_{true};
+  bool radio_bsl_expected_{false};
   bool operation_active_{false};
   bool async_reset_active_{false};
   uint32_t async_reset_started_ms_{0};
@@ -259,6 +280,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
 
   ZigbeeSerialInterface serial_{};
   ZigbeeTcpServer tcp_server_{};
+  ZigbeeUsbBridge usb_bridge_{};
 
 #ifdef USE_UART_DEBUGGER
   ZnpSnifferState tx_sniffer_{};
@@ -286,6 +308,20 @@ class RouterRejoinButton : public button::Button, public Parented<ZigbeeGatewayC
 class RadioMetadataRefreshButton : public button::Button, public Parented<ZigbeeGatewayComponent> {
  protected:
   void press_action() override { this->parent_->request_metadata_refresh(); }
+};
+
+class ZigbeeTransportSelect : public select::Select,
+                              public Component,
+                              public Parented<ZigbeeGatewayComponent> {
+ public:
+  void setup() override;
+  void dump_config() override;
+  float get_setup_priority() const override { return setup_priority::HARDWARE; }
+
+ protected:
+  void control(size_t index) override;
+
+  ESPPreferenceObject preference_{};
 };
 
 }  // namespace zigbee_gateway

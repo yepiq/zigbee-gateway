@@ -133,6 +133,7 @@ void ZigbeeTcpServer::shutdown() {
   this->close_client_(this->active_, false);
   this->close_client_(this->parked_, false);
   this->server_.reset();
+  this->clear_stream_buffers_();
   this->started_ = false;
   this->state_.shutdown();
   if (this->serial_ != nullptr)
@@ -304,78 +305,38 @@ void ZigbeeTcpServer::classify_active_() {
 }
 
 void ZigbeeTcpServer::pump_active_() {
-  this->pump_tcp_to_uart_();
-  if (!this->active_.connected()) {
-    this->handle_active_disconnect_();
-    return;
-  }
-  this->pump_uart_to_tcp_();
-  if (!this->active_.connected())
-    this->handle_active_disconnect_();
-}
-
-void ZigbeeTcpServer::pump_tcp_to_uart_() {
   if (this->active_.prebuffer_length > 0) {
-    this->serial_->remote_write_array(this->active_.prebuffer.data(), this->active_.prebuffer_length);
+    if (!this->stream_pump_.queue_left_to_right(
+            this->active_.prebuffer.data(), this->active_.prebuffer_length)) {
+      ESP_LOGE(TCP_TAG, "Could not queue the active client's quarantined bytes");
+      this->active_.socket.reset();
+      this->handle_active_disconnect_();
+      return;
+    }
     this->active_.prebuffer_length = 0;
   }
 
-  uint8_t chunk[IO_CHUNK_SIZE];
-  size_t budget = LOOP_IO_BUDGET;
-  while (budget > 0) {
-    const size_t requested = std::min(sizeof(chunk), budget);
-    const ssize_t count = this->active_.socket->read(chunk, requested);
-    if (count > 0) {
-      this->active_.bytes_received += static_cast<uint32_t>(count);
-      this->serial_->remote_write_array(chunk, static_cast<size_t>(count));
-      budget -= static_cast<size_t>(count);
-      continue;
-    }
-    if (count == 0) {
-      this->active_.socket.reset();
-      return;
-    }
-    if (errno == EWOULDBLOCK || errno == EAGAIN)
-      return;
-    ESP_LOGW(TCP_TAG, "Read failed for active client %s: errno=%d", this->active_.identifier.c_str(), errno);
-    this->active_.socket.reset();
-    return;
-  }
-}
+  const auto owner =
+      this->state_.active() == ZigbeeTcpActiveState::MAINTENANCE
+          ? ZigbeeSerialInterface::Owner::TCP_MAINTENANCE
+          : ZigbeeSerialInterface::Owner::TCP_NORMAL;
+  this->socket_endpoint_.set_socket(this->active_.socket.get());
+  this->radio_endpoint_.set_owner(owner);
+  this->stream_pump_.set_left(&this->socket_endpoint_);
+  this->stream_pump_.set_right(&this->radio_endpoint_);
 
-void ZigbeeTcpServer::pump_uart_to_tcp_() {
-  if (this->uart_buffer_length_ == 0) {
-    const int available = this->serial_->remote_available();
-    if (available > 0) {
-      const size_t count = std::min<size_t>(static_cast<size_t>(available), this->uart_buffer_.size());
-      if (this->serial_->remote_read_array(this->uart_buffer_.data(), count)) {
-        this->uart_buffer_offset_ = 0;
-        this->uart_buffer_length_ = count;
-      }
-    }
-  }
-
-  while (this->uart_buffer_length_ > 0) {
-    const ssize_t written =
-        this->active_.socket->write(this->uart_buffer_.data() + this->uart_buffer_offset_,
-                                    this->uart_buffer_length_);
-    if (written > 0) {
-      this->uart_buffer_offset_ += static_cast<size_t>(written);
-      this->uart_buffer_length_ -= static_cast<size_t>(written);
-      if (this->uart_buffer_length_ == 0)
-        this->uart_buffer_offset_ = 0;
-      continue;
-    }
-    if (written == 0) {
-      this->active_.socket.reset();
-      return;
-    }
-    if (errno == EWOULDBLOCK || errno == EAGAIN)
-      return;
-    ESP_LOGW(TCP_TAG, "Write failed for active client %s: errno=%d", this->active_.identifier.c_str(), errno);
-    this->active_.socket.reset();
+  const auto result = this->stream_pump_.pump();
+  if (result == ZigbeeStreamPumpResult::ACTIVE)
     return;
+
+  if (result == ZigbeeStreamPumpResult::LEFT_ERROR ||
+      result == ZigbeeStreamPumpResult::RIGHT_ERROR) {
+    ESP_LOGW(TCP_TAG, "Stream pump failed for active client %s: result=%u errno=%d",
+             this->active_.identifier.c_str(), static_cast<unsigned>(result),
+             this->socket_endpoint_.last_error());
   }
+  this->active_.socket.reset();
+  this->handle_active_disconnect_();
 }
 
 void ZigbeeTcpServer::drain_parked_() {
@@ -475,7 +436,7 @@ void ZigbeeTcpServer::start_bsl_rendezvous_timer_() {
 void ZigbeeTcpServer::begin_maintenance_with_active_(MaintenanceCommand command) {
   if (!this->active_.connected())
     return;
-  this->clear_uart_output_();
+  this->clear_stream_buffers_();
   this->serial_->set_owner(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
   this->serial_->drain(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
   ESP_LOGI(TCP_TAG, "Client %s became the maintenance UART owner", this->active_.identifier.c_str());
@@ -486,7 +447,7 @@ void ZigbeeTcpServer::begin_maintenance_with_pending_(MaintenanceCommand command
   if (!this->pending_.connected())
     return;
 
-  this->clear_uart_output_();
+  this->clear_stream_buffers_();
   if (this->active_.connected()) {
     this->parked_ = std::move(this->active_);
     this->active_ = Client{};
@@ -519,7 +480,7 @@ void ZigbeeTcpServer::handle_active_disconnect_() {
   const bool was_maintenance = result.action == ZigbeeTcpDisconnectAction::FINISH_MAINTENANCE;
   const std::string identifier = this->active_.identifier;
   this->close_client_(this->active_, false);
-  this->clear_uart_output_();
+  this->clear_stream_buffers_();
   this->serial_->set_owner(ZigbeeSerialInterface::Owner::NONE);
   ESP_LOGI(TCP_TAG, "%s client %s disconnected", was_maintenance ? "Maintenance" : "Normal",
            identifier.c_str());
@@ -561,9 +522,8 @@ void ZigbeeTcpServer::finish_maintenance_(bool recover_radio) {
     this->parent_->on_tcp_maintenance_finished_();
 }
 
-void ZigbeeTcpServer::clear_uart_output_() {
-  this->uart_buffer_offset_ = 0;
-  this->uart_buffer_length_ = 0;
+void ZigbeeTcpServer::clear_stream_buffers_() {
+  this->stream_pump_.reset();
 }
 
 void ZigbeeTcpServer::publish_sensors_() {

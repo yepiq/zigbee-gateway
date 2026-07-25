@@ -26,6 +26,33 @@ static const char *const TAG = "zigbee_gateway";
 // wiring or user service policy and therefore intentionally stay out of YAML.
 static constexpr uint32_t RESET_IND_TIMEOUT_MS = 5000;
 static constexpr uint32_t RESET_PARSER_START_TIMEOUT_MS = 20;
+static constexpr uint32_t USB_BRIDGE_BSL_BAUD_RATE = 500000;
+
+void ZigbeeTransportSelect::setup() {
+  size_t index = 0;
+  this->preference_ = this->make_entity_preference<size_t>();
+  if (!this->preference_.load(&index) || !this->has_index(index))
+    index = 0;
+
+  ZigbeeTransportMode mode;
+  if (!zigbee_transport_mode_from_index(index, &mode))
+    mode = ZigbeeTransportMode::TCP;
+  this->parent_->request_transport_mode(mode);
+  this->publish_state(index);
+}
+
+void ZigbeeTransportSelect::dump_config() {
+  LOG_SELECT("", "Zigbee Serial Transport", this);
+}
+
+void ZigbeeTransportSelect::control(size_t index) {
+  ZigbeeTransportMode mode;
+  if (!zigbee_transport_mode_from_index(index, &mode))
+    return;
+  this->preference_.save(&index);
+  this->parent_->request_transport_mode(mode);
+  this->publish_state(index);
+}
 
 struct ZnpTiming {
   uint32_t start_timeout_ms;
@@ -118,6 +145,10 @@ void ZigbeeGatewayComponent::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Zigbee Gateway...");
 
   this->serial_.set_uart(this->parent_);
+  this->normal_radio_baud_rate_ = this->parent_->get_baud_rate();
+  this->normal_usb_baud_rate_ = this->usb_uart_->get_baud_rate();
+  this->usb_bridge_.set_serial(&this->serial_);
+  this->usb_bridge_.set_usb_uart(this->usb_uart_);
   this->serial_.set_owner(ZigbeeSerialInterface::Owner::LOCAL);
   this->tcp_server_.set_parent(this);
   this->tcp_server_.set_serial(&this->serial_);
@@ -129,10 +160,17 @@ void ZigbeeGatewayComponent::setup() {
 
   this->reset_pin_->setup();
   this->bsl_pin_->setup();
+  this->mode_pin_->setup();
+  this->mode_led_pin_->setup();
   // Both pins are configured inverted for UZG-01. Writing false means the
   // logical control is released, independent of the physical pin polarity.
   this->reset_pin_->digital_write(false);
   this->bsl_pin_->digital_write(false);
+  this->transport_mode_ = this->requested_transport_mode_;
+  this->mode_pin_->digital_write(
+      zigbee_transport_uses_direct_pin(this->transport_mode_));
+  this->mode_led_pin_->digital_write(
+      this->transport_mode_ != ZigbeeTransportMode::TCP);
 
 #ifdef USE_UART_DEBUGGER
   // Passive byte tap only: this callback observes TX/RX but never consumes RX.
@@ -147,16 +185,27 @@ void ZigbeeGatewayComponent::setup() {
   // starts; it must not cause another BSL/reset cycle after flashing.
   this->setup_metadata_cache_();
   this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
+  if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED)
+    this->usb_bridge_.start();
 }
 
 void ZigbeeGatewayComponent::loop() {
   this->register_web_handlers_();
-  if (!this->tcp_server_.is_started())
-    this->tcp_server_.start();
-  this->tcp_server_.loop();
+  if (this->requested_transport_mode_ != this->transport_mode_ &&
+      !this->operation_active_ && !this->async_reset_active_)
+    this->apply_transport_mode_(this->requested_transport_mode_);
+
+  if (this->transport_mode_ == ZigbeeTransportMode::TCP) {
+    if (!this->tcp_server_.is_started())
+      this->tcp_server_.start();
+    this->tcp_server_.loop();
+  } else if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED) {
+    this->usb_bridge_.loop();
+  }
 #ifdef USE_UART_DEBUGGER
   // UART debug callbacks execute synchronously inside reads/writes. Apply HA
-  // publications and preference writes only after the TCP pump returns.
+  // publications and preference writes only after the active stream pump
+  // returns.
   this->process_znp_observations_();
 #endif
   if (this->async_reset_active_)
@@ -167,6 +216,14 @@ void ZigbeeGatewayComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "Zigbee Gateway:");
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  BSL Pin: ", this->bsl_pin_);
+  LOG_PIN("  USB Direct Select Pin: ", this->mode_pin_);
+  LOG_PIN("  Mode LED Pin: ", this->mode_led_pin_);
+  ESP_LOGCONFIG(TAG, "  Zigbee serial transport: %s",
+                zigbee_transport_mode_name(this->transport_mode_));
+  ESP_LOGCONFIG(TAG, "  Radio UART normal baud: %u",
+                (unsigned) this->normal_radio_baud_rate_);
+  ESP_LOGCONFIG(TAG, "  USB UART normal baud: %u",
+                (unsigned) this->normal_usb_baud_rate_);
   ESP_LOGCONFIG(TAG, "  TCP compatibility port: %u", (unsigned) this->tcp_port_);
   ESP_LOGCONFIG(TAG, "  Pending socket timeout: %u ms", (unsigned) this->pending_socket_timeout_ms_);
   ESP_LOGCONFIG(TAG, "  Parked socket timeout: %u ms", (unsigned) this->parked_socket_timeout_ms_);
@@ -180,7 +237,87 @@ void ZigbeeGatewayComponent::dump_config() {
                 (unsigned) CHIP_LAYOUT_X2X7.nv_page_size);
 }
 
-void ZigbeeGatewayComponent::on_shutdown() { this->tcp_server_.shutdown(); }
+void ZigbeeGatewayComponent::on_shutdown() {
+  this->tcp_server_.shutdown();
+  this->usb_bridge_.stop();
+}
+
+bool ZigbeeGatewayComponent::apply_transport_mode_(ZigbeeTransportMode mode) {
+  if (mode == this->transport_mode_)
+    return true;
+
+  ESP_LOGI(TAG, "Changing Zigbee serial transport from %s to %s",
+           zigbee_transport_mode_name(this->transport_mode_),
+           zigbee_transport_mode_name(mode));
+
+  // Tear down the old external owner before changing GPIO33 or admitting the
+  // new owner. There is never a moment when TCP and the USB bridge can both
+  // access the radio UART.
+  if (this->transport_mode_ == ZigbeeTransportMode::TCP)
+    this->tcp_server_.shutdown();
+  else if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED)
+    this->usb_bridge_.stop();
+  this->serial_.set_owner(ZigbeeSerialInterface::Owner::NONE);
+
+  this->transport_mode_ = mode;
+  this->mode_pin_->digital_write(zigbee_transport_uses_direct_pin(mode));
+  this->mode_led_pin_->digital_write(mode != ZigbeeTransportMode::TCP);
+
+  if (mode == ZigbeeTransportMode::TCP && this->radio_bsl_expected_) {
+    // A manual transport change cannot preserve an in-progress direct/bridged
+    // flash. Reset to a known application-mode baud before reopening TCP.
+    this->reset_for_remote_();
+  } else if (mode == ZigbeeTransportMode::USB_BRIDGED) {
+    this->configure_usb_bridge_baud_(
+        this->radio_bsl_expected_ ? USB_BRIDGE_BSL_BAUD_RATE
+                                  : this->normal_radio_baud_rate_);
+    if (!this->usb_bridge_.start()) {
+      // Fail closed: selecting a USB mode must never unexpectedly reopen TCP.
+      ESP_LOGE(TAG, "USB bridge startup failed; TCP remains shut down");
+      return false;
+    }
+  }
+
+  // TCP listener startup remains in loop(), where network readiness and retry
+  // backoff are already handled. USB Direct intentionally owns no ESP UART.
+  return true;
+}
+
+void ZigbeeGatewayComponent::configure_usb_bridge_baud_(uint32_t baud_rate) {
+  this->usb_bridge_.reset_buffers();
+  this->parent_->set_baud_rate(baud_rate);
+  this->parent_->load_settings(false);
+  this->usb_uart_->set_baud_rate(baud_rate);
+  this->usb_uart_->load_settings(false);
+  this->usb_bridge_.reset_buffers();
+  ESP_LOGI(TAG, "USB bridge UARTs configured at %u baud",
+           (unsigned) baud_rate);
+}
+
+void ZigbeeGatewayComponent::restore_normal_uart_bauds_() {
+  this->usb_bridge_.reset_buffers();
+  this->parent_->set_baud_rate(this->normal_radio_baud_rate_);
+  this->parent_->load_settings(false);
+  this->usb_uart_->set_baud_rate(this->normal_usb_baud_rate_);
+  this->usb_uart_->load_settings(false);
+  this->usb_bridge_.reset_buffers();
+  ESP_LOGI(TAG, "Restored radio and USB UARTs to their normal baud rates");
+}
+
+bool ZigbeeGatewayComponent::local_uart_access_allowed_(
+    const char *operation) const {
+  if (this->transport_mode_ != ZigbeeTransportMode::TCP) {
+    ESP_LOGW(TAG, "%s requires TCP mode because USB activity cannot be detected",
+             operation);
+    return false;
+  }
+  if (this->tcp_server_.has_any_client()) {
+    ESP_LOGW(TAG, "TCP client connected; %s skipped to preserve UART ownership",
+             operation);
+    return false;
+  }
+  return true;
+}
 
 bool ZigbeeGatewayComponent::socket_connected_() const {
   return this->tcp_server_.has_any_client();
@@ -492,15 +629,22 @@ void ZigbeeGatewayComponent::setup_metadata_cache_() {
     return;
   }
 
+  if (this->transport_mode_ != ZigbeeTransportMode::TCP) {
+    ESP_LOGI(TAG,
+             "Physical Zigbee identity is unavailable, but %s is selected; "
+             "startup identification is deferred until an explicit refresh in TCP mode.",
+             zigbee_transport_mode_name(this->transport_mode_));
+    this->publish_metadata_status_("Unavailable");
+    return;
+  }
+
   ESP_LOGI(TAG, "Physical Zigbee identity is unavailable; running one-time identification.");
   this->refresh_metadata_();
 }
 
 bool ZigbeeGatewayComponent::refresh_metadata_() {
-  if (this->socket_connected_()) {
-    ESP_LOGW(TAG, "TCP client connected; metadata refresh skipped to preserve UART ownership.");
+  if (!this->local_uart_access_allowed_("Zigbee information refresh"))
     return false;
-  }
 
   this->mark_running_image_pending_();
   if (this->physical_identity_available_)
@@ -604,7 +748,11 @@ void ZigbeeGatewayComponent::enter_bsl_blocking_() {
   this->bsl_pin_->digital_write(false);
   delay(100);
 
-  if (this->ip_address_text_sensor_ != nullptr && this->ip_address_text_sensor_->has_state()) {
+  if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED) {
+    ESP_LOGI(TAG, "Zigbee is in BSL mode; raw flashing transport is USB Bridged.");
+  } else if (this->transport_mode_ == ZigbeeTransportMode::USB_DIRECT) {
+    ESP_LOGI(TAG, "Zigbee is in BSL mode; raw flashing transport is USB Direct.");
+  } else if (this->ip_address_text_sensor_ != nullptr && this->ip_address_text_sensor_->has_state()) {
     ESP_LOGI(TAG,
              "Zigbee is in BSL mode. To update firmware, run: "
              "cc2538-bsl.py -p socket://%s:%u -evw firmware.hex",
@@ -683,6 +831,16 @@ void ZigbeeGatewayComponent::request_metadata_refresh() {
 void ZigbeeGatewayComponent::request_restart_() {
   if (this->operation_active_) {
     ESP_LOGW(TAG, "Another Zigbee operation is active; restart request ignored.");
+    return;
+  }
+
+  if (this->transport_mode_ != ZigbeeTransportMode::TCP) {
+    // USB Bridged retains the software stream owner; USB Direct has no ESP UART
+    // owner. In both cases the external USB tool must receive the reset bytes,
+    // so local code toggles only the pin and never consumes SYS_RESET_IND.
+    this->operation_active_ = true;
+    this->reset_for_remote_();
+    this->operation_active_ = false;
     return;
   }
 
@@ -772,6 +930,16 @@ void ZigbeeGatewayComponent::request_bsl_() {
     return;
   }
 
+  if (this->transport_mode_ != ZigbeeTransportMode::TCP) {
+    // The bridge remains exclusively owned by USB while the pin sequence runs.
+    // USB Direct bypasses both ESP UARTs, but the ESP still controls BSL/reset
+    // so firmware flashing does not require surrendering the whole ESP32.
+    this->operation_active_ = true;
+    this->enter_bsl_for_remote_();
+    this->operation_active_ = false;
+    return;
+  }
+
   if (this->tcp_server_.is_started()) {
     this->tcp_server_.request_bsl();
     return;
@@ -836,10 +1004,8 @@ void ZigbeeGatewayComponent::request_metadata_refresh_() {
     ESP_LOGW(TAG, "Another Zigbee operation is active; metadata refresh request ignored.");
     return;
   }
-  if (this->tcp_server_.has_any_client()) {
-    ESP_LOGW(TAG, "TCP client connected; stop it before manually refreshing Zigbee information.");
+  if (!this->local_uart_access_allowed_("manual Zigbee information refresh"))
     return;
-  }
   if (!this->serial_.claim(ZigbeeSerialInterface::Owner::LOCAL)) {
     ESP_LOGW(TAG, "UART is owned by another operation; metadata refresh request ignored.");
     return;
@@ -852,21 +1018,28 @@ void ZigbeeGatewayComponent::request_metadata_refresh_() {
 }
 
 void ZigbeeGatewayComponent::enter_bsl_for_remote_() {
-  // The TCP server has already selected the exclusive maintenance owner and
-  // quarantined any normal client. Keep the raw stream opaque: only manipulate
-  // the radio pins here; the external tool owns every following BSL byte.
+  // TCP maintenance or USB Bridged has already selected the exclusive external
+  // owner. USB Direct bypasses the ESP UARTs entirely. Keep the raw stream
+  // opaque: only manipulate pins and, for the software USB bridge, match the
+  // bootloader baud used by XZG.
   this->mark_running_image_pending_();
   this->enter_bsl_blocking_();
+  this->radio_bsl_expected_ = true;
+  if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED)
+    this->configure_usb_bridge_baud_(USB_BRIDGE_BSL_BAUD_RATE);
 }
 
 void ZigbeeGatewayComponent::reset_for_remote_() {
   // Compatibility reset used by /cmdZigRST. Do not consume SYS_RESET_IND or
-  // run local ZNP diagnostics: the active TCP client must receive all UART
-  // bytes, and may continue with application-mode requests on the same socket.
-  ESP_LOGI(TAG, "Resetting Zigbee module for remote TCP owner.");
+  // run local ZNP diagnostics: the active external client must receive all
+  // radio bytes and may continue with application-mode requests.
+  ESP_LOGI(TAG, "Resetting Zigbee module for external serial owner.");
   this->reset_pin_->digital_write(true);
   delay(15);
   this->reset_pin_->digital_write(false);
+  this->restore_normal_uart_bauds_();
+  this->radio_bsl_expected_ = false;
+  this->sniffer_enabled_ = true;
 }
 
 void ZigbeeGatewayComponent::on_tcp_normal_session_started_() {

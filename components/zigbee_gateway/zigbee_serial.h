@@ -12,8 +12,8 @@ namespace zigbee_gateway {
 ///
 /// ESPHome permits more than one UARTDevice to reference the same UART bus, but
 /// it does not arbitrate reads. The gateway therefore exposes the physical UART
-/// only through this interface. Local ZNP/BSL diagnostics and the TCP bridge
-/// must explicitly own it before consuming or producing bytes.
+/// only through this interface. Local ZNP/BSL diagnostics and either external
+/// stream bridge must explicitly own it before consuming or producing bytes.
 class ZigbeeSerialInterface {
  public:
   enum class Owner : uint8_t {
@@ -21,6 +21,7 @@ class ZigbeeSerialInterface {
     LOCAL = 1,
     TCP_NORMAL = 2,
     TCP_MAINTENANCE = 3,
+    USB_BRIDGE = 4,
   };
 
   void set_uart(uart::UARTComponent *uart) { this->uart_ = uart; }
@@ -29,6 +30,9 @@ class ZigbeeSerialInterface {
   bool is_local_owner() const { return this->owner_ == Owner::LOCAL; }
   bool is_tcp_owner() const {
     return this->owner_ == Owner::TCP_NORMAL || this->owner_ == Owner::TCP_MAINTENANCE;
+  }
+  bool is_stream_owner() const {
+    return this->is_tcp_owner() || this->owner_ == Owner::USB_BRIDGE;
   }
 
   bool claim(Owner owner) {
@@ -78,21 +82,25 @@ class ZigbeeSerialInterface {
       this->uart_->flush();
   }
 
-  /// TCP bridge operations use a separate surface so a local protocol routine
-  /// cannot accidentally operate while a remote session owns the UART.
-  int remote_available() const {
-    if (!this->is_tcp_owner() || this->uart_ == nullptr)
+  /// Transparent bridge operations require the caller's exact owner token.
+  /// This keeps TCP and USB Bridged mutually exclusive even though both use
+  /// the same stream pump.
+  int stream_available(Owner owner) const {
+    if (!this->is_stream_owner() || this->owner_ != owner || this->uart_ == nullptr)
       return 0;
     return this->uart_->available();
   }
 
-  bool remote_read_array(uint8_t *data, size_t length) {
-    return this->is_tcp_owner() && this->uart_ != nullptr && this->uart_->read_array(data, length);
+  bool stream_read_array(Owner owner, uint8_t *data, size_t length) {
+    return this->is_stream_owner() && this->owner_ == owner && this->uart_ != nullptr &&
+           this->uart_->read_array(data, length);
   }
 
-  void remote_write_array(const uint8_t *data, size_t length) {
-    if (this->is_tcp_owner() && this->uart_ != nullptr)
-      this->uart_->write_array(data, length);
+  bool stream_write_array(Owner owner, const uint8_t *data, size_t length) {
+    if (!this->is_stream_owner() || this->owner_ != owner || this->uart_ == nullptr)
+      return false;
+    this->uart_->write_array(data, length);
+    return true;
   }
 
   void drain(Owner owner) {
