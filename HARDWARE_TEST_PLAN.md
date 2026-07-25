@@ -452,8 +452,8 @@ category.
 ### HW-01 — Zigbee serial transport and red LED
 
 - Status: `NOT RUN`
-- Procedure: Toggle between `Zigbee TCP Serial` and `Zigbee USB Serial` from
-  ESPHome and with the physical button.
+- Procedure: Toggle between `TCP` and `USB` in the `Zigbee Serial Transport`
+  selector and with the physical button.
 - Expected: GPIO33 selects the intended serial path; the red mode LED preserves
   the original UZG-01 allocation and matches the selected transport; the
   selection survives reboot according to the configured restore behavior.

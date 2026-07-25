@@ -64,7 +64,7 @@ transport over a particular medium.
 | Indicator | Original UZG behavior | XZG reference behavior | Current project behavior |
 | --- | --- | --- | --- |
 | Blue power LED | Constant while powered | Blinks without a network TCP client; constant with one | Constant while powered |
-| Red mode LED | On for USB serial; off for Ethernet serial | On for USB, off for network, with additional status patterns | On for **Zigbee USB Serial**; off for **Zigbee TCP Serial** |
+| Red mode LED | On for USB serial; off for Ethernet serial | On for USB, off for network, with additional status patterns | On for **USB**; off for **TCP** |
 | Yellow/white Zigbee LED | On after Zigbee2MQTT connects | Controlled through the Zigbee radio | Radio `LED1` is turned on at normal TCP-session admission and off at disconnect |
 
 The yellow/white indicator is connected to the Zigbee radio, not an ESP32 GPIO.
@@ -183,8 +183,8 @@ The example configuration exposes:
   rejected connections, pending timeouts, maintenance sessions, and recovery
   resets.
 - Controls: restart Zigbee, enter BSL, router rejoin, temporary manual
-  information refresh, and the **Zigbee TCP Serial** / **Zigbee USB Serial**
-  selector.
+  information refresh, and the **TCP** / **USB** options of the
+  **Zigbee Serial Transport** selector.
 
 Transport counters, cache provenance, and connection topology are diagnostic
 entities.

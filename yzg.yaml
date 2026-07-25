@@ -69,7 +69,7 @@ esphome:
   name_add_mac_suffix: false
   project:
     name: yepiq.Zigbee_Gateway
-    version: '2.01b'
+    version: '2.02b'
 
 esp32:
   board: esp32dev
@@ -214,16 +214,16 @@ select:
     id: select_mode
     icon: mdi:swap-horizontal
     options:
-      - Zigbee TCP Serial
-      - Zigbee USB Serial
-    initial_option: Zigbee TCP Serial
+      - TCP
+      - USB
+    initial_option: TCP
     optimistic: true
     restore_value: true
     entity_category: config
     set_action:
       - if:
           condition:
-            lambda: 'return x == "Zigbee USB Serial";'
+            lambda: 'return x == "USB";'
           then:
             - switch.turn_on: switch_mode
           else:
