@@ -11,6 +11,7 @@
 #include "esphome/components/socket/socket.h"
 
 #include "zigbee_serial.h"
+#include "zigbee_tcp_state.h"
 
 namespace esphome {
 namespace zigbee_gateway {
@@ -52,15 +53,6 @@ class ZigbeeTcpServer {
   size_t connection_count() const;
 
  protected:
-  enum class ClientRole : uint8_t {
-    NONE = 0,
-    PROVISIONAL = 1,
-    NORMAL = 2,
-    PENDING = 3,
-    MAINTENANCE = 4,
-    PARKED = 5,
-  };
-
   enum class MaintenanceCommand : uint8_t {
     BSL = 0,
     RESET = 1,
@@ -74,7 +66,6 @@ class ZigbeeTcpServer {
   struct Client {
     std::unique_ptr<socket::Socket> socket{};
     std::string identifier{};
-    ClientRole role{ClientRole::NONE};
     uint32_t connected_at{0};
     uint32_t bytes_received{0};
     uint32_t bytes_discarded{0};
@@ -98,14 +89,13 @@ class ZigbeeTcpServer {
   void pump_uart_to_tcp_();
   void drain_parked_();
 
-  void arm_bsl_();
-  void clear_bsl_arm_(bool recover_radio);
+  void start_bsl_rendezvous_timer_();
   void begin_maintenance_with_active_(MaintenanceCommand command);
   void begin_maintenance_with_pending_(MaintenanceCommand command);
   void apply_maintenance_command_(MaintenanceCommand command);
   void handle_active_disconnect_();
   void promote_pending_after_normal_disconnect_();
-  void finish_maintenance_();
+  void finish_maintenance_(bool recover_radio);
   void clear_uart_output_();
   void publish_sensors_();
 
@@ -122,8 +112,7 @@ class ZigbeeTcpServer {
   Client pending_{};
   Client parked_{};
 
-  bool bsl_armed_{false};
-  bool bsl_entered_{false};
+  ZigbeeTcpState state_{};
   uint32_t bsl_armed_at_{0};
   uint32_t parked_at_{0};
 

@@ -79,9 +79,10 @@ void ZigbeeTcpServer::loop() {
   if (this->pending_.connected() && !this->collect_prebuffer_(this->pending_)) {
     ESP_LOGD(TCP_TAG, "Pending client %s disconnected", this->pending_.identifier.c_str());
     this->close_client_(this->pending_, false);
+    this->state_.close_pending();
   }
 
-  if (this->active_.connected() && this->active_.role == ClientRole::PROVISIONAL) {
+  if (this->active_.connected() && this->state_.active() == ZigbeeTcpActiveState::PROVISIONAL) {
     if (!this->collect_prebuffer_(this->active_)) {
       this->handle_active_disconnect_();
     } else {
@@ -90,7 +91,8 @@ void ZigbeeTcpServer::loop() {
   }
 
   if (this->active_.connected() &&
-      (this->active_.role == ClientRole::NORMAL || this->active_.role == ClientRole::MAINTENANCE))
+      (this->state_.active() == ZigbeeTcpActiveState::NORMAL ||
+       this->state_.active() == ZigbeeTcpActiveState::MAINTENANCE))
     this->pump_active_();
 
   this->drain_parked_();
@@ -100,11 +102,13 @@ void ZigbeeTcpServer::loop() {
     ESP_LOGW(TCP_TAG, "Pending client %s timed out after %u ms", this->pending_.identifier.c_str(),
              static_cast<unsigned>(this->pending_timeout_ms_));
     this->close_client_(this->pending_, true);
+    this->state_.close_pending();
   }
-  if (this->bsl_armed_ && now - this->bsl_armed_at_ >= this->pending_timeout_ms_) {
+  if (this->state_.bsl_armed() && now - this->bsl_armed_at_ >= this->pending_timeout_ms_) {
     ESP_LOGW(TCP_TAG, "BSL rendezvous timed out after %u ms", static_cast<unsigned>(this->pending_timeout_ms_));
-    const bool radio_was_in_bsl = this->bsl_entered_;
-    this->clear_bsl_arm_(true);
+    const bool radio_was_in_bsl = this->state_.expire_bsl_rendezvous();
+    if (radio_was_in_bsl && this->parent_ != nullptr)
+      this->parent_->reset_for_remote_();
     if (radio_was_in_bsl && this->parent_ != nullptr)
       this->parent_->on_tcp_maintenance_finished_();
   }
@@ -112,6 +116,7 @@ void ZigbeeTcpServer::loop() {
     ESP_LOGW(TCP_TAG, "Parked client %s reached the %u ms safety limit; closing it",
              this->parked_.identifier.c_str(), static_cast<unsigned>(this->park_timeout_ms_));
     this->close_client_(this->parked_, true);
+    this->state_.close_parked();
   }
 
   this->publish_sensors_();
@@ -123,6 +128,7 @@ void ZigbeeTcpServer::shutdown() {
   this->close_client_(this->parked_, false);
   this->server_.reset();
   this->started_ = false;
+  this->state_.shutdown();
   if (this->serial_ != nullptr)
     this->serial_->set_owner(ZigbeeSerialInterface::Owner::NONE);
   this->publish_sensors_();
@@ -133,7 +139,7 @@ bool ZigbeeTcpServer::has_any_client() const {
 }
 
 bool ZigbeeTcpServer::maintenance_active() const {
-  return this->active_.connected() && this->active_.role == ClientRole::MAINTENANCE;
+  return this->active_.connected() && this->state_.active() == ZigbeeTcpActiveState::MAINTENANCE;
 }
 
 size_t ZigbeeTcpServer::connection_count() const {
@@ -155,34 +161,31 @@ void ZigbeeTcpServer::accept_clients_() {
     if (!client.connected())
       continue;
 
-    if (!this->active_.connected()) {
-      this->active_ = std::move(client);
-      if (this->bsl_armed_) {
-        this->active_.role = ClientRole::MAINTENANCE;
+    switch (this->state_.accept_client()) {
+      case ZigbeeTcpAcceptAction::ACTIVATE_PROVISIONAL:
+        this->active_ = std::move(client);
+        ESP_LOGI(TCP_TAG, "Provisional client connected from %s", this->active_.identifier.c_str());
+        break;
+      case ZigbeeTcpAcceptAction::ACTIVATE_MAINTENANCE:
+        this->active_ = std::move(client);
         this->serial_->set_owner(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
         this->serial_->drain(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
-        this->bsl_armed_ = false;
         ESP_LOGI(TCP_TAG, "Maintenance client %s connected after BSL command",
                  this->active_.identifier.c_str());
-      } else {
-        this->active_.role = ClientRole::PROVISIONAL;
-        ESP_LOGI(TCP_TAG, "Provisional client connected from %s", this->active_.identifier.c_str());
-      }
-      continue;
-    }
-
-    if ((this->active_.role == ClientRole::NORMAL || this->active_.role == ClientRole::PROVISIONAL) &&
-        !this->pending_.connected()) {
-      client.role = ClientRole::PENDING;
-      this->pending_ = std::move(client);
-      ESP_LOGI(TCP_TAG, "Holding first pending client from %s for up to %u ms",
-               this->pending_.identifier.c_str(), static_cast<unsigned>(this->pending_timeout_ms_));
-      if (this->bsl_armed_)
+        break;
+      case ZigbeeTcpAcceptAction::HOLD_PENDING:
+        this->pending_ = std::move(client);
+        ESP_LOGI(TCP_TAG, "Holding first pending client from %s for up to %u ms",
+                 this->pending_.identifier.c_str(), static_cast<unsigned>(this->pending_timeout_ms_));
+        break;
+      case ZigbeeTcpAcceptAction::TAKE_OVER_WITH_NEW_CLIENT:
+        this->pending_ = std::move(client);
         this->begin_maintenance_with_pending_(MaintenanceCommand::BSL);
-      continue;
+        break;
+      case ZigbeeTcpAcceptAction::REJECT:
+        this->reject_client_(client, "another active or pending client already exists");
+        break;
     }
-
-    this->reject_client_(client, "another active or pending client already exists");
   }
 }
 
@@ -262,7 +265,7 @@ bool ZigbeeTcpServer::collect_prebuffer_(Client &client) {
 }
 
 void ZigbeeTcpServer::classify_active_() {
-  if (!this->active_.connected() || this->active_.role != ClientRole::PROVISIONAL ||
+  if (!this->active_.connected() || this->state_.active() != ZigbeeTcpActiveState::PROVISIONAL ||
       this->active_.prebuffer_length == 0)
     return;
 
@@ -270,7 +273,8 @@ void ZigbeeTcpServer::classify_active_() {
   // immediately after connecting. A connection-first flashing tool remains
   // silent until it has sent /cmdZigBSL, so any pre-command TCP payload makes
   // this the normal transparent owner.
-  this->active_.role = ClientRole::NORMAL;
+  if (!this->state_.receive_active_payload())
+    return;
   this->serial_->set_owner(ZigbeeSerialInterface::Owner::TCP_NORMAL);
   this->serial_->drain(ZigbeeSerialInterface::Owner::TCP_NORMAL);
   if (this->parent_ != nullptr)
@@ -371,12 +375,14 @@ void ZigbeeTcpServer::drain_parked_() {
       ESP_LOGI(TCP_TAG, "Parked client %s disconnected after %u discarded bytes",
                this->parked_.identifier.c_str(), static_cast<unsigned>(this->parked_.bytes_discarded));
       this->close_client_(this->parked_, false);
+      this->state_.close_parked();
       return;
     }
     if (errno == EWOULDBLOCK || errno == EAGAIN)
       return;
     ESP_LOGW(TCP_TAG, "Read failed for parked client %s: errno=%d", this->parked_.identifier.c_str(), errno);
     this->close_client_(this->parked_, false);
+    this->state_.close_parked();
     return;
   }
 }
@@ -387,31 +393,30 @@ void ZigbeeTcpServer::request_bsl() {
     return;
   }
 
-  if (this->maintenance_active()) {
-    this->apply_maintenance_command_(MaintenanceCommand::BSL);
-    return;
+  const bool already_maintenance = this->maintenance_active();
+  const auto action = this->state_.request_bsl(this->active_.bytes_received != 0);
+  switch (action) {
+    case ZigbeeTcpBslAction::APPLY_TO_ACTIVE:
+      if (already_maintenance)
+        this->apply_maintenance_command_(MaintenanceCommand::BSL);
+      else
+        this->begin_maintenance_with_active_(MaintenanceCommand::BSL);
+      break;
+    case ZigbeeTcpBslAction::TAKE_OVER_WITH_PENDING:
+      this->begin_maintenance_with_pending_(MaintenanceCommand::BSL);
+      break;
+    case ZigbeeTcpBslAction::ARM_AND_WAIT:
+      this->start_bsl_rendezvous_timer_();
+      break;
+    case ZigbeeTcpBslAction::ENTER_BSL_AND_WAIT:
+      // Command-first tools send /cmdZigBSL, wait, and only then establish
+      // TCP. With no normal client to preserve, enter BSL immediately.
+      this->serial_->set_owner(ZigbeeSerialInterface::Owner::NONE);
+      if (this->parent_ != nullptr)
+        this->parent_->enter_bsl_for_remote_();
+      this->start_bsl_rendezvous_timer_();
+      break;
   }
-  if (this->pending_.connected()) {
-    this->begin_maintenance_with_pending_(MaintenanceCommand::BSL);
-    return;
-  }
-  if (this->active_.connected() && this->active_.bytes_received == 0) {
-    this->begin_maintenance_with_active_(MaintenanceCommand::BSL);
-    return;
-  }
-  if (this->active_.connected()) {
-    this->arm_bsl_();
-    return;
-  }
-
-  // Command-first tools send /cmdZigBSL, wait, and only then establish TCP.
-  // With no normal client to preserve, enter BSL immediately and remember that
-  // the next TCP connection is the maintenance owner.
-  this->serial_->set_owner(ZigbeeSerialInterface::Owner::NONE);
-  if (this->parent_ != nullptr)
-    this->parent_->enter_bsl_for_remote_();
-  this->bsl_entered_ = true;
-  this->arm_bsl_();
 }
 
 void ZigbeeTcpServer::request_reset() {
@@ -421,43 +426,35 @@ void ZigbeeTcpServer::request_reset() {
     return;
   }
 
-  if (this->pending_.connected()) {
-    this->begin_maintenance_with_pending_(MaintenanceCommand::RESET);
-    return;
+  const bool already_maintenance = this->maintenance_active();
+  const auto action = this->state_.request_reset(this->active_.bytes_received != 0);
+  switch (action) {
+    case ZigbeeTcpResetAction::APPLY_TO_ACTIVE:
+      if (already_maintenance)
+        this->apply_maintenance_command_(MaintenanceCommand::RESET);
+      else
+        this->begin_maintenance_with_active_(MaintenanceCommand::RESET);
+      break;
+    case ZigbeeTcpResetAction::TAKE_OVER_WITH_PENDING:
+      this->begin_maintenance_with_pending_(MaintenanceCommand::RESET);
+      break;
+    case ZigbeeTcpResetAction::RESET_ONLY:
+      if (this->parent_ != nullptr)
+        this->parent_->reset_for_remote_();
+      break;
   }
-  if (this->active_.connected() &&
-      (this->active_.role == ClientRole::MAINTENANCE || this->active_.bytes_received == 0)) {
-    if (this->active_.role != ClientRole::MAINTENANCE)
-      this->begin_maintenance_with_active_(MaintenanceCommand::RESET);
-    else
-      this->apply_maintenance_command_(MaintenanceCommand::RESET);
-    return;
-  }
-
-  this->clear_bsl_arm_(false);
-  if (this->parent_ != nullptr)
-    this->parent_->reset_for_remote_();
 }
 
-void ZigbeeTcpServer::arm_bsl_() {
-  this->bsl_armed_ = true;
+void ZigbeeTcpServer::start_bsl_rendezvous_timer_() {
   this->bsl_armed_at_ = millis();
   ESP_LOGI(TCP_TAG, "BSL rendezvous armed for %u ms; the normal client remains active",
            static_cast<unsigned>(this->pending_timeout_ms_));
-}
-
-void ZigbeeTcpServer::clear_bsl_arm_(bool recover_radio) {
-  if (recover_radio && this->bsl_entered_ && this->parent_ != nullptr)
-    this->parent_->reset_for_remote_();
-  this->bsl_armed_ = false;
-  this->bsl_entered_ = false;
 }
 
 void ZigbeeTcpServer::begin_maintenance_with_active_(MaintenanceCommand command) {
   if (!this->active_.connected())
     return;
   this->clear_uart_output_();
-  this->active_.role = ClientRole::MAINTENANCE;
   this->serial_->set_owner(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
   this->serial_->drain(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
   ESP_LOGI(TCP_TAG, "Client %s became the maintenance UART owner", this->active_.identifier.c_str());
@@ -470,7 +467,6 @@ void ZigbeeTcpServer::begin_maintenance_with_pending_(MaintenanceCommand command
 
   this->clear_uart_output_();
   if (this->active_.connected()) {
-    this->active_.role = ClientRole::PARKED;
     this->parked_ = std::move(this->active_);
     this->active_ = Client{};
     this->parked_at_ = millis();
@@ -480,7 +476,6 @@ void ZigbeeTcpServer::begin_maintenance_with_pending_(MaintenanceCommand command
 
   this->active_ = std::move(this->pending_);
   this->pending_ = Client{};
-  this->active_.role = ClientRole::MAINTENANCE;
   this->serial_->set_owner(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
   this->serial_->drain(ZigbeeSerialInterface::Owner::TCP_MAINTENANCE);
   ESP_LOGI(TCP_TAG, "Client %s became the maintenance UART owner", this->active_.identifier.c_str());
@@ -488,20 +483,18 @@ void ZigbeeTcpServer::begin_maintenance_with_pending_(MaintenanceCommand command
 }
 
 void ZigbeeTcpServer::apply_maintenance_command_(MaintenanceCommand command) {
-  this->bsl_armed_ = false;
   if (this->parent_ == nullptr)
     return;
   if (command == MaintenanceCommand::BSL) {
     this->parent_->enter_bsl_for_remote_();
-    this->bsl_entered_ = true;
   } else {
     this->parent_->reset_for_remote_();
-    this->bsl_entered_ = false;
   }
 }
 
 void ZigbeeTcpServer::handle_active_disconnect_() {
-  const bool was_maintenance = this->active_.role == ClientRole::MAINTENANCE;
+  const auto result = this->state_.disconnect_active();
+  const bool was_maintenance = result.action == ZigbeeTcpDisconnectAction::FINISH_MAINTENANCE;
   const std::string identifier = this->active_.identifier;
   this->close_client_(this->active_, false);
   this->clear_uart_output_();
@@ -510,8 +503,8 @@ void ZigbeeTcpServer::handle_active_disconnect_() {
            identifier.c_str());
 
   if (was_maintenance) {
-    this->finish_maintenance_();
-  } else {
+    this->finish_maintenance_(result.recover_radio);
+  } else if (result.action == ZigbeeTcpDisconnectAction::PROMOTE_PENDING) {
     this->promote_pending_after_normal_disconnect_();
   }
 }
@@ -521,17 +514,17 @@ void ZigbeeTcpServer::promote_pending_after_normal_disconnect_() {
     return;
   this->active_ = std::move(this->pending_);
   this->pending_ = Client{};
-  this->active_.role = ClientRole::PROVISIONAL;
   ESP_LOGI(TCP_TAG, "Pending client %s became provisional after the normal owner disconnected",
            this->active_.identifier.c_str());
 }
 
-void ZigbeeTcpServer::finish_maintenance_() {
+void ZigbeeTcpServer::finish_maintenance_(bool recover_radio) {
   // A successful newer XZG-MT session normally issues /cmdZigRST before it
   // disconnects. If a client instead exits while the radio may still be in ROM
   // BSL (including an aborted flash), perform one recovery reset here. An
   // already-running image tolerates the same reset after legacy tools.
-  this->clear_bsl_arm_(true);
+  if (recover_radio && this->parent_ != nullptr)
+    this->parent_->reset_for_remote_();
   if (this->parked_.connected()) {
     ESP_LOGI(TCP_TAG, "Closing parked client %s so it can restart against the post-maintenance radio",
              this->parked_.identifier.c_str());

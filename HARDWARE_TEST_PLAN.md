@@ -150,6 +150,25 @@ maintenance window and a recovery method.
   termination checks reject malformed records; hardware boot treats a schema
   mismatch as unavailable and performs initial identification.
 
+## Host transport state tests
+
+Run `tests/zigbee_tcp_state_test.cpp` after every change that can alter TCP
+client roles, pending/parked topology, maintenance takeover, or BSL rendezvous.
+The deterministic suite currently covers:
+
+- provisional-to-normal classification;
+- the first-pending and third-client rejection policy;
+- pending promotion after the normal owner disconnects;
+- connection-first and command-first BSL maintenance;
+- last-moment parking of the normal client;
+- same-socket maintenance reset behavior;
+- BSL rendezvous expiry and recovery intent.
+
+The suite also captures the current armed-owner-disconnect edge case: after the
+normal owner disconnects while BSL rendezvous is armed, the next maintenance
+socket is classified correctly but BSL entry is not repeated. Correct that
+transition in a separate behavior-change commit and update the expected test.
+
 ## Ordinary TCP transport
 
 ### TCP-01 — Normal Zigbee2MQTT session
