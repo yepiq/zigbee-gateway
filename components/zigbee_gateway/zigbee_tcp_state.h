@@ -134,9 +134,8 @@ inline const char *zigbee_tcp_event_name(ZigbeeTcpEvent event) {
 
 /// Socket-independent transport state and transition policy.
 ///
-/// The TCP server owns the actual sockets and UART side effects. This class is
-/// deliberately limited to deterministic role/topology decisions so every
-/// supported ordering can be exercised by a small native host test.
+/// The TCP server owns sockets and UART side effects; this class contains only
+/// deterministic role and topology decisions.
 class ZigbeeTcpState {
  public:
   ZigbeeTcpActiveState active() const { return this->active_; }

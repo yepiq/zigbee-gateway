@@ -1,8 +1,7 @@
 # UZG-01 Hardware Test Plan
 
-This is the durable acceptance checklist for the Zigbee Gateway project. Add or
-revise cases whenever behavior changes; do not rely on an old chat transcript
-when the UZG-01 becomes available again.
+Bench acceptance checklist for the UZG-01 Zigbee Gateway firmware. Record the
+device, software versions, and evidence for every test session.
 
 ## Status vocabulary
 
@@ -11,7 +10,6 @@ when the UZG-01 becomes available again.
 - `FAIL`: observed result does not match the expected result; retain evidence.
 - `BLOCKED`: the test cannot proceed because a prerequisite is missing.
 - `RETEST`: previously passed, but a later change affects this behavior.
-- `PLANNED`: desired behavior is recorded but not implemented yet.
 
 ## Test-session record
 
@@ -638,16 +636,11 @@ category.
 - Status: `NOT RUN`
 - Procedure: Observe boot, normal operation, TCP connect/disconnect, and
   maintenance.
-- Expected: Current ESPHome behavior is documented. Decide separately whether
-  to reproduce XZG's connection-dependent blink/on behavior.
+- Expected: The blue power LED remains steadily on.
 
 ### HW-03 — Yellow Zigbee2MQTT connection LED
 
 - Status: `NOT RUN`
-- Historical intent: UZG-01 documents the yellow/white LED as on when
-  Zigbee2MQTT is connected. The original YAML exposed ZNP
-  `UTIL_LED_CONTROL(LED1, OFF/ON)` frames as an internal UART switch, but no
-  automation invoked it.
 - Procedure: Observe the LED while connecting a silent provisional socket,
   connecting and disconnecting Zigbee2MQTT, opening a pending socket, and
   performing a maintenance takeover. Repeat once with a clean ESP32 shutdown.
@@ -675,16 +668,7 @@ category.
 - Expected: BSL/rejoin pin timing produces pairing behavior without a competing
   TCP UART owner.
 
-## Deferred optimization tests
-
-Add cases here when the protocol-aware preemption parser is implemented:
-
-- Detect ZNP transaction boundaries without modifying the opaque stream.
-- Prefer takeover between transactions, but enforce a strict maximum wait.
-- Confirm malformed or partial frames cannot block maintenance indefinitely.
-- Repeat every maintenance test above with busy Zigbee traffic.
-
-## Historical LED references
+## References
 
 - [UZG-01 LED behavior](https://uzg.zig-star.com/getting-started/#led-behaviour)
 - [XZG LED behavior](https://xzg.xyzroe.cc/hardware/#led-indicators)

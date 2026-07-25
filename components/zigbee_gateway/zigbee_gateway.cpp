@@ -22,8 +22,8 @@ static const char *const TAG = "zigbee_gateway";
 
 // Protocol timing policy
 // ----------------------
-// These values tune the gateway's private ZNP/BSL parsers. They are not board
-// wiring or user service policy and therefore intentionally stay out of YAML.
+// Internal ZNP/BSL parser limits; independent of board wiring and session
+// policy.
 static constexpr uint32_t RESET_IND_TIMEOUT_MS = 5000;
 static constexpr uint32_t RESET_PARSER_START_TIMEOUT_MS = 20;
 static constexpr uint32_t USB_BRIDGE_BSL_BAUD_RATE = 500000;
@@ -179,10 +179,9 @@ void ZigbeeGatewayComponent::setup() {
       [this](uart::UARTDirection direction, uint8_t byte) { this->sniff_byte_(direction, byte); });
 #endif
 
-  // Restore the three independently persisted scopes without touching the
-  // radio. Only missing physical identity requires an intrusive startup BSL
-  // pass. A changed running image waits for passive observation after TCP
-  // starts; it must not cause another BSL/reset cycle after flashing.
+  // Restore independent physical, image, and network records. Only missing
+  // physical identity requires a startup probe; mutable data can be learned
+  // from later application traffic.
   this->setup_metadata_cache_();
   this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
   if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED)
@@ -247,8 +246,8 @@ bool ZigbeeGatewayComponent::apply_transport_mode_(ZigbeeTransportMode mode) {
     return true;
 
 #ifdef USE_UART_DEBUGGER
-  // Preserve observations already completed by the old stream owner before
-  // changing how their provenance is presented in the new transport.
+  // Apply completed observations before the transport changes their
+  // provenance.
   this->process_znp_observations_();
 #endif
 
@@ -256,9 +255,8 @@ bool ZigbeeGatewayComponent::apply_transport_mode_(ZigbeeTransportMode mode) {
            zigbee_transport_mode_name(this->transport_mode_),
            zigbee_transport_mode_name(mode));
 
-  // Tear down the old external owner before changing GPIO33 or admitting the
-  // new owner. There is never a moment when TCP and the USB bridge can both
-  // access the radio UART.
+  // Release the active external owner before switching GPIO33 or admitting
+  // another owner.
   if (this->transport_mode_ == ZigbeeTransportMode::TCP)
     this->tcp_server_.shutdown();
   else if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED)
@@ -284,8 +282,8 @@ bool ZigbeeGatewayComponent::apply_transport_mode_(ZigbeeTransportMode mode) {
     }
   }
 
-  // TCP listener startup remains in loop(), where network readiness and retry
-  // backoff are already handled. USB Direct intentionally owns no ESP UART.
+  // loop() starts the TCP listener when the network is ready. USB Direct has no
+  // ESP UART owner.
   if (mode == ZigbeeTransportMode::USB_DIRECT)
     this->publish_direct_metadata_provenance_();
   return true;
@@ -474,10 +472,8 @@ void ZigbeeGatewayComponent::publish_network_information_status_(const char *sta
 }
 
 void ZigbeeGatewayComponent::publish_direct_metadata_provenance_() {
-  // GPIO33 has routed the transparent stream around the ESP32. Keep every
-  // last-known value visible, but no longer describe mutable image/network
-  // information as observed or verified while the component cannot see it.
-  // Physical identity remains a lifetime property and is never invalidated.
+  // USB Direct hides the serial stream from the ESP32. Preserve values but
+  // demote mutable image/network provenance; physical identity remains valid.
   this->network_observed_this_boot_ = false;
   this->publish_metadata_status_(zigbee_restored_metadata_status(
       this->transport_mode_, this->physical_identity_available_,
@@ -568,9 +564,8 @@ bool ZigbeeGatewayComponent::save_network_snapshot_cache_() {
 }
 
 bool ZigbeeGatewayComponent::mark_running_image_pending_() {
-  // A transparent flash can replace every image-owned value. Retain the
-  // physical and network records, but do not present the old firmware/role/
-  // active IEEE/CCFG fields as belonging to the new image.
+  // BSL can replace all image-owned values. Preserve physical identity and the
+  // last network snapshot, but clear firmware, role, active IEEE, and CCFG.
   const uint32_t next_generation = this->running_image_.generation + 1;
   initialize_running_image_cache(&this->running_image_, next_generation);
   this->running_image_.awaiting_observation = 1;
@@ -900,9 +895,8 @@ void ZigbeeGatewayComponent::request_restart_() {
 }
 
 void ZigbeeGatewayComponent::process_async_reset_() {
-  // Stateful, bounded parser: consume at most 64 bytes per loop pass and never
-  // spin waiting for a partial ZNP frame. This replaces the unbounded YAML
-  // loops from the working baseline while preserving SYS_RESET_IND detection.
+  // Consume at most 64 bytes per loop pass so a partial frame cannot block the
+  // component while it waits for SYS_RESET_IND.
   uint8_t byte = 0;
   uint8_t consumed = 0;
   while (consumed < 64 && this->serial_.available() && this->serial_.read_byte(&byte)) {
@@ -963,9 +957,8 @@ void ZigbeeGatewayComponent::request_bsl_() {
   }
 
   if (this->transport_mode_ != ZigbeeTransportMode::TCP) {
-    // The bridge remains exclusively owned by USB while the pin sequence runs.
-    // USB Direct bypasses both ESP UARTs, but the ESP still controls BSL/reset
-    // so firmware flashing does not require surrendering the whole ESP32.
+    // USB Bridged keeps its UART owner during the pin sequence. USB Direct
+    // bypasses both ESP UARTs while retaining ESP control of BSL and reset.
     this->operation_active_ = true;
     this->enter_bsl_for_remote_();
     this->operation_active_ = false;
@@ -1050,10 +1043,8 @@ void ZigbeeGatewayComponent::request_metadata_refresh_() {
 }
 
 void ZigbeeGatewayComponent::enter_bsl_for_remote_() {
-  // TCP maintenance or USB Bridged has already selected the exclusive external
-  // owner. USB Direct bypasses the ESP UARTs entirely. Keep the raw stream
-  // opaque: only manipulate pins and, for the software USB bridge, match the
-  // bootloader baud used by XZG.
+  // The external transport already owns the stream. Manipulate only pins and,
+  // for USB Bridged, match the XZG bootloader baud; BSL bytes remain opaque.
   this->mark_running_image_pending_();
   this->enter_bsl_blocking_();
   this->radio_bsl_expected_ = true;
@@ -1091,10 +1082,8 @@ bool ZigbeeGatewayComponent::set_radio_connection_led_(bool on) {
   //   SREQ  0x27/0x0A { LED1=0x01, OFF=0x00 | ON=0x01 }
   //   SRSP  0x67/0x0A { status=0x00 }
   //
-  // This helper is called only while TCP bytes are quarantined at a session
-  // boundary. It must claim the shared UART like every other local protocol
-  // operation; restoring the old independent ESPHome UART writer would allow
-  // an LED command to corrupt a live Zigbee2MQTT transaction.
+  // TCP bytes are quarantined while this helper claims the UART, preventing the
+  // LED transaction from corrupting client traffic.
   if (this->role_ == "Router") {
     ESP_LOGD(TAG, "Router firmware does not expose ZNP LED control; leaving Zigbee connection LED unchanged.");
     return false;
@@ -1136,12 +1125,9 @@ bool ZigbeeGatewayComponent::set_radio_connection_led_(bool on) {
 }
 
 void ZigbeeGatewayComponent::on_tcp_maintenance_finished_() {
-  // Transparent BSL access can replace coordinator firmware with router
-  // firmware (or vice versa) without the ESP32 observing the image. The BSL
-  // session marked only the mutable running-image record before pin takeover.
-  // Do not re-enter BSL or scan NV now: admit the next normal TCP owner and
-  // learn the resulting image/network from its ordinary ZNP startup traffic.
-  // Physical identity remains valid for the lifetime of the soldered radio.
+  // A transparent BSL session may change image and role without exposing the
+  // payload. Admit the next normal client immediately and learn mutable state
+  // from its ZNP traffic; physical identity remains valid.
   this->sniffer_enabled_ = true;
   if (!this->running_image_available_ || this->running_image_.awaiting_observation == 0) {
     ESP_LOGI(TAG, "Maintenance transport ended without a pending running-image change.");
@@ -1248,9 +1234,8 @@ bool ZigbeeGatewayComponent::read_memory_word_(uint32_t address, const char *nam
 }
 
 bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
-  // This is a functional replica of XZG CCTools::detectChipInfo. The
-  // register addresses and interpretation are kept beside the implementation
-  // because they describe the supported TI chip/storage layouts.
+  // Register decoding follows XZG CCTools::detectChipInfo for the supported TI
+  // chip and storage layouts.
   static constexpr uint32_t ICEPICK_DEVICE_ID = 0x50001318u;
   static constexpr uint32_t FCFG_USER_ID = 0x50001294u;
   static constexpr uint32_t FLASH_SIZE_REG = 0x4003002Cu;
@@ -1302,10 +1287,8 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
   ESP_LOGD(TAG, "protocols=0x%02X (FCFG_USER_ID=%02X %02X %02X %02X)", chip->protocols, user_id[0],
            user_id[1], user_id[2], user_id[3]);
 
-  // FLASH_SIZE[0] reports a family-dependent count. CCTools and the working
-  // baseline multiply it by 4 KiB on x2 and 8 KiB on x2x7. This register unit
-  // is not the NVOCMP page size; the two geometries are modeled separately in
-  // ZigbeeChipLayout.
+  // FLASH_SIZE[0] is a family-dependent count: 4 KiB units on x2 and 8 KiB
+  // units on x2x7. It is independent of the NVOCMP page size.
   uint8_t flash_size_reg[4] = {0};
   if (!this->read_memory_word_(FLASH_SIZE_REG, "FLASH_SIZE", flash_size_reg))
     return false;
@@ -1387,11 +1370,8 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
   this->publish_hardware_(chip->hardware.c_str());
 
   if (layout == nullptr) {
-    // No family geometry means there is no defensible multiplier for
-    // FLASH_SIZE_REG[0] and no safe end-of-flash CCFG or NVOCMP address.
-    // Fail the identification instead of persisting a partial physical record:
-    // a later boot or manual refresh must be allowed to try identification
-    // again once support for the family exists.
+    // Unknown family geometry provides neither a valid FLASH_SIZE multiplier
+    // nor safe CCFG/NVOCMP addresses. Reject partial identification.
     ESP_LOGW(TAG,
              "Unknown chip family; skipping flash-size, CCFG, IEEE, and NV layout reads, "
              "and leaving physical identity unverified.");
@@ -1632,9 +1612,8 @@ void ZigbeeGatewayComponent::scan_nv_(ChipFamily family) {
     }
   };
 
-  // protocol.h owns the detailed NVOCMP page/header/item layout, active-item
-  // filtering, CRC-8 validation, and BSL windowed reads. This frontend only
-  // selects and decodes the three diagnostic items above.
+  // The scanner validates NVOCMP headers, active state, bounds, and CRC before
+  // dispatching the selected diagnostic items.
   nzg_nv_scan_and_dispatch(&this->serial_, config, wanted, WANTED_COUNT, frontend);
 }
 
@@ -1870,8 +1849,7 @@ void ZigbeeGatewayComponent::sniff_byte_(uart::UARTDirection direction, uint8_t 
       }
 
       if (fcs_ok && command_type == 1 && (state.cmd0 & 0x1F) == 0x01) {
-        // Genuine Yepiq diagnostic: passively observe both supported ZNP
-        // commands that change radio TX power.
+        // Observe both supported ZNP commands that change radio TX power.
         int8_t dbm = 0;
         bool matched = false;
         if (state.cmd1 == 0x14 && state.length == 1) {
@@ -1908,9 +1886,8 @@ void ZigbeeGatewayComponent::register_web_handlers_() {
   if (server == nullptr)
     return;
 
-  // Compatibility endpoints retained from the working gateway/XZG behavior.
-  // The command is coordinated with the TCP session manager before pins move;
-  // remote BSL payload remains opaque and owned by the external flash tool.
+  // Coordinate maintenance commands with socket ownership before moving pins;
+  // the external tool retains ownership of the opaque BSL payload.
   server->add_handler(new GatewayCommandHandler("/cmdZigBSL", [this]() { this->request_bsl(); }));
   server->add_handler(new GatewayCommandHandler("/cmdZigRST", [this]() { this->request_restart(); }));
   ESP_LOGI(TAG, "Registered web endpoints: /cmdZigBSL, /cmdZigRST");

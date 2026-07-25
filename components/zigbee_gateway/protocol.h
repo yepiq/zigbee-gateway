@@ -713,11 +713,9 @@ static inline bool bsl_read_bytes(ZigbeeSerialInterface *uart,
 
 // -------- Zigbee NVOCMP (flash NV) backend helpers --------
 //
-// These helpers implement the low-level scan of the Zigbee NVOCMP region used by
-// Z-Stack 3.x (Koenkk builds on CC13x2/CC26x2/CC26x2x7). YAML code should only
-// describe *which* NV items are interesting and provide small per-item callbacks
-// that interpret their payloads and publish sensors. All the heavy lifting
-// (page discovery, item streaming, CRC) stays here.
+// Low-level scanner for the Z-Stack 3.x NVOCMP region used by Koenkk builds on
+// CC13x2/CC26x2/CC26x2x7. The caller selects items and interprets payloads;
+// this scanner handles page discovery, item streaming, and CRC validation.
 //
 // NVOCMP layout (Koenkk variant used by zigbee2mqtt routers/coordinators):
 //

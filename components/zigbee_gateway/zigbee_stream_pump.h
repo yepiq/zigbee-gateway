@@ -58,8 +58,8 @@ enum class ZigbeeStreamPumpResult : uint8_t {
 ///
 /// Each direction has its own retained buffer. This is important for TCP,
 /// where a non-blocking socket may accept only part of a radio response; it is
-/// also harmless for UART-to-UART forwarding and keeps both transports on the
-/// exact same data path.
+/// also safe for UART-to-UART forwarding and gives both transports identical
+/// buffering semantics.
 class ZigbeeStreamPump {
  public:
   static constexpr size_t BUFFER_SIZE = 1024;

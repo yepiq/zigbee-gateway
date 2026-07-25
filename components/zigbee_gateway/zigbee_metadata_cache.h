@@ -8,10 +8,8 @@
 namespace esphome {
 namespace zigbee_gateway {
 
-// Schema 2 deliberately replaces the former all-in-one metadata snapshot.
-// Physical chip identity, the currently installed image, and the joined
-// network have different invalidation rules and must never share one dirty
-// bit.
+// Physical identity, running-image metadata, and network state have independent
+// invalidation rules and persistence records.
 static constexpr uint16_t ZIGBEE_CACHE_SCHEMA = 2;
 static constexpr uint32_t PHYSICAL_IDENTITY_CACHE_MAGIC = 0x5A475048u;  // "ZGPH"
 static constexpr uint32_t RUNNING_IMAGE_CACHE_MAGIC = 0x5A47494Du;     // "ZGIM"

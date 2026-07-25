@@ -64,8 +64,6 @@ esp32:
 
 ### External components
 external_components:
-  # Local while developing; the published configuration can track this
-  # repository once the component extraction is committed.
   - source: components
     components: [zigbee_gateway]
 
@@ -86,11 +84,7 @@ web_server:
   version: 3
   id: websrv
 
-### ZIGBEE RADIO
-#
-# Detailed chip-family, CCFG/BSL, flash-layout, NVOCMP, NIB field-map, and
-# protocol behavior documentation now lives beside the implementation in:
-#   components/zigbee_gateway/{zigbee_gateway.cpp,zigbee_chip_layout.h,protocol.h}
+### Zigbee radio
 zigbee_gateway:
   id: zigbee_gateway_component
   uart_id: uart_bus
