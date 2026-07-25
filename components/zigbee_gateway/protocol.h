@@ -1,11 +1,12 @@
 #pragma once
 
 #include "esphome.h"
+#include "zigbee_serial.h"
 
 using esphome::App;
 using esphome::delay;
 using esphome::millis;
-using esphome::uart::UARTComponent;
+using esphome::zigbee_gateway::ZigbeeSerialInterface;
 
 namespace esphome {
 namespace zigbee_gateway {
@@ -17,7 +18,7 @@ namespace zigbee_gateway {
 // - Non-blocking polling: only calls read_byte() when data is buffered.
 // - Returns true iff one byte was consumed into *out* before timeout_ms expires.
 // - Side effect: consumes exactly 1 byte on success; consumes nothing on timeout.
-static inline bool uart_read_byte_t(UARTComponent *uart, uint8_t *out, uint32_t timeout_ms)
+static inline bool uart_read_byte_t(ZigbeeSerialInterface *uart, uint8_t *out, uint32_t timeout_ms)
 {
   uint32_t start = millis();
   while (millis() - start < timeout_ms)
@@ -34,7 +35,7 @@ static inline bool uart_read_byte_t(UARTComponent *uart, uint8_t *out, uint32_t 
 // Consume all currently buffered RX bytes.
 // - Never waits for new data, never logs, never sleeps.
 // - Safe to call before starting a fresh exchange to clear stale bytes.
-static inline void uart_drain(UARTComponent *uart)
+static inline void uart_drain(ZigbeeSerialInterface *uart)
 {
   uint8_t b;
   while (uart->available())
@@ -53,7 +54,7 @@ static inline void uart_drain(UARTComponent *uart)
 // - Returns true iff *value* was read (and consumed) before timeout_ms.
 // - Useful for seeking ZNP SOF (0xFE) or BSL ACK (0xCC).
 // - Does not sleep; scans as fast as the loop runs.
-static inline bool uart_seek_byte(UARTComponent *uart, uint8_t value, uint32_t timeout_ms)
+static inline bool uart_seek_byte(ZigbeeSerialInterface *uart, uint8_t value, uint32_t timeout_ms)
 {
   uint8_t b;
   uint32_t start = millis();
@@ -71,7 +72,7 @@ static inline bool uart_seek_byte(UARTComponent *uart, uint8_t value, uint32_t t
 // Read exactly *len* bytes into *buf*, honoring a per-byte timeout.
 // - Returns true only if all *len* bytes were read; leaves already-read bytes consumed.
 // - Built on uart_read_byte_t(): will not engage read_byte() when RX is empty.
-static inline bool uart_read_exact_t(UARTComponent *uart, uint8_t *buf, size_t len, uint32_t per_byte_timeout_ms)
+static inline bool uart_read_exact_t(ZigbeeSerialInterface *uart, uint8_t *buf, size_t len, uint32_t per_byte_timeout_ms)
 {
   for (size_t i = 0; i < len; i++)
   {
@@ -97,7 +98,7 @@ static inline uint8_t znp_fcs(uint8_t len, uint8_t cmd0, uint8_t cmd1, const uin
 }
 
 // Send one ZNP frame: writes SOF, LEN, CMD0, CMD1, DATA (if any), then FCS. Flushes at the end.
-static inline void znp_send(UARTComponent *uart, uint8_t cmd0, uint8_t cmd1,
+static inline void znp_send(ZigbeeSerialInterface *uart, uint8_t cmd0, uint8_t cmd1,
                             const uint8_t *data, uint8_t len)
 {
   const uint8_t fcs = znp_fcs(len, cmd0, cmd1, data);
@@ -114,7 +115,7 @@ static inline void znp_send(UARTComponent *uart, uint8_t cmd0, uint8_t cmd1,
 // - Reads header, DATA[len], and FCS with per-byte timeouts.
 // - Verifies FCS; returns true and fills outputs on success.
 // - Returns false on timeout, malformed frame, or FCS mismatch.
-static inline bool znp_recv_once(UARTComponent *uart,
+static inline bool znp_recv_once(ZigbeeSerialInterface *uart,
                                  uint8_t *cmd0, uint8_t *cmd1,
                                  uint8_t *data, size_t data_capacity, uint8_t *len,
                                  uint32_t start_timeout_ms, uint32_t byte_timeout_ms)
@@ -162,7 +163,7 @@ static inline bool znp_recv_once(UARTComponent *uart,
 // - Non-matching frames are consumed and discarded.
 // - Returns true and sets *out_len* when a matching frame is seen.
 template <typename Pred>
-static inline bool znp_recv_until(UARTComponent *uart,
+static inline bool znp_recv_until(ZigbeeSerialInterface *uart,
                                   Pred pred,
                                   uint8_t *buf, size_t buf_capacity, uint8_t *out_len,
                                   uint32_t start_timeout_ms,
@@ -210,7 +211,7 @@ static inline bool znp_recv_until(UARTComponent *uart,
 // Returns true iff a matching SRSP was received and on_match() executed.
 // Side effects: consumes UART bytes, including unrelated frames during the wait window.
 template <typename Handler>
-static inline bool znp_exec(UARTComponent *uart,
+static inline bool znp_exec(ZigbeeSerialInterface *uart,
                             uint8_t sreq_cmd0, uint8_t sreq_cmd1,
                             uint8_t exp_cmd0, uint8_t exp_cmd1,
                             Handler on_match,
@@ -280,7 +281,7 @@ static inline uint32_t decode_u32_be(const uint8_t in[4])
 
 // -------- BSL helpers --------
 // Send host ACK for a received BSL packet (two bytes: 0x00, 0xCC).
-static inline void bsl_host_ack(UARTComponent *uart)
+static inline void bsl_host_ack(ZigbeeSerialInterface *uart)
 {
   const uint8_t a[2] = {0x00, 0xCC};
   uart->write_array(a, 2);
@@ -290,7 +291,7 @@ static inline void bsl_host_ack(UARTComponent *uart)
 
 // Issue BSL GET_STATUS (0x23) and acknowledge its reply.
 // Returns true if a well-formed status packet is received and ACKed; writes first status byte to *status (if non-null).
-static inline bool bsl_get_status(UARTComponent *uart,
+static inline bool bsl_get_status(ZigbeeSerialInterface *uart,
                                   uint32_t ack_timeout_ms,
                                   uint32_t header_timeout_ms,
                                   uint32_t payload_timeout_ms,
@@ -358,7 +359,7 @@ static inline bool bsl_get_status(UARTComponent *uart,
 // Enter/align with BSL by sending two 0x55 bytes with a small gap.
 // - Drains RX first to remove stale bytes.
 // - Optionally waits for an ACK (0xCC) after the second 0x55.
-static inline bool bsl_sync(UARTComponent *uart, uint32_t ack_timeout_ms, uint32_t sync_gap_ms)
+static inline bool bsl_sync(ZigbeeSerialInterface *uart, uint32_t ack_timeout_ms, uint32_t sync_gap_ms)
 {
   uart_drain(uart);
   uart->write_byte(0x55);
@@ -395,7 +396,7 @@ static inline bool bsl_sync(UARTComponent *uart, uint32_t ack_timeout_ms, uint32
 //
 // Returns true iff the reply was received, validated, and on_reply() executed.
 template <typename Handler>
-static inline bool bsl_exec(UARTComponent *uart,
+static inline bool bsl_exec(ZigbeeSerialInterface *uart,
                             const uint8_t *cmd, uint8_t cmd_len,
                             Handler on_reply,
                             uint8_t *scratch, uint8_t scratch_capacity,
@@ -499,7 +500,7 @@ static inline bool bsl_exec(UARTComponent *uart,
 //   attempts             : Number of attempts (default 1)
 //
 // Returns true iff a valid reply was received and copied into *out.
-static inline bool bsl_mem_read(UARTComponent *uart,
+static inline bool bsl_mem_read(ZigbeeSerialInterface *uart,
                                 uint32_t addr, uint8_t width, uint8_t count,
                                 uint8_t *out, uint8_t out_capacity, uint8_t *out_len,
                                 uint32_t ack_timeout_ms,
@@ -569,7 +570,7 @@ static inline bool bsl_mem_read(UARTComponent *uart,
 // - name:  optional tag for debug logging; may be nullptr to suppress logs.
 // - Uses ack/header/payload timeouts as for bsl_mem_read() and a single attempt.
 // Returns true on success (full words*4 bytes read), false on failure.
-static inline bool bsl_read_words(UARTComponent *uart,
+static inline bool bsl_read_words(ZigbeeSerialInterface *uart,
                                   uint32_t addr, uint8_t words,
                                   uint8_t *out, const char *name,
                                   uint32_t ack_timeout_ms,
@@ -612,7 +613,7 @@ static inline bool bsl_read_words(UARTComponent *uart,
 //   Internally performs multiple aligned MEM_READ calls with up to 63 words (252 bytes),
 //   but caps each logical chunk at 248 bytes to match typical ROM BSL constraints.
 // Returns true on success, false on any MEM_READ failure.
-static inline bool bsl_read_bytes(UARTComponent *uart,
+static inline bool bsl_read_bytes(ZigbeeSerialInterface *uart,
                                   uint32_t addr, uint32_t n,
                                   uint8_t *out, const char *name,
                                   uint32_t ack_timeout_ms,
@@ -856,7 +857,7 @@ static inline uint8_t nzg_nv_crc8(const uint8_t *data, uint32_t len, uint8_t ini
 //   - Logs CRC mismatches and NOT FOUND items
 //
 template <typename FrontendCb>
-static inline void nzg_nv_scan_and_dispatch(UARTComponent *uart,
+static inline void nzg_nv_scan_and_dispatch(ZigbeeSerialInterface *uart,
                                             const NzgNvScanConfig &cfg,
                                             NzgNvWanted *wanted,
                                             int wanted_count,

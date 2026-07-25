@@ -3,6 +3,8 @@ substitutions:
   friendly_name: Yepiq Zigbee Gateway
 
   tcp_serial_port: 6638
+  tcp_pending_socket_timeout_ms: 30000
+  tcp_parked_socket_timeout_ms: 600000
 
   button_pin: GPIO35
   button_inverted: true
@@ -67,7 +69,7 @@ esphome:
   name_add_mac_suffix: false
   project:
     name: yepiq.Zigbee_Gateway
-    version: '1.91b'
+    version: '1.92b'
 
 esp32:
   board: esp32dev
@@ -83,11 +85,6 @@ external_components:
   # repository once the component extraction is committed.
   - source: components
     components: [zigbee_gateway]
-
-  # Temporary compile-only compatibility source from upstream PR #71.
-  # This server remains scheduled for complete replacement.
-  - source: github://grob6000/esphome-stream-server@2eade8f0ec9c5282631e09af95f08b634c6a5c20
-    components: [stream_server]
 
 api:
   # This Ethernet gateway must remain operational without an API client.
@@ -111,9 +108,19 @@ web_server:
 zigbee_gateway:
   id: zigbee_gateway_component
   uart_id: uart_bus
-  socket_connected: socket_status
   ip_address: mcu_ip_address
   tcp_port: ${tcp_serial_port}
+  pending_socket_timeout: ${tcp_pending_socket_timeout_ms}ms
+  parked_socket_timeout: ${tcp_parked_socket_timeout_ms}ms
+
+  socket_connected:
+    name: Socket Status
+    id: socket_status
+    entity_category: ''
+  connection_count:
+    name: Socket Connections
+    id: socket_connections
+    entity_category: ''
 
   reset_pin:
     number: ${zRST_pin}
@@ -220,21 +227,7 @@ binary_sensor:
       then:
         - select.next: select_mode
 
-  ## Socket connection status
-  - platform: stream_server
-    connected:
-      name: Socket Status
-      id: socket_status
-      entity_category: ''
-
 sensor:
-  - platform: stream_server
-    connection_count:
-      name: Socket Connections
-      id: socket_connections
-      entity_category: ''
-      icon: mdi:counter
-
   - platform: uptime
     id: uptime_s
     update_interval: 60s
@@ -279,17 +272,6 @@ switch:
       inverted: ${led_blue_inverted}
     restore_mode: ALWAYS_ON
 
-  ### YELLOW LED - Zigbee Connection Indicator
-  - platform: uart
-    name: Zigbee LED (YELLOW)
-    id: led_yellow
-    internal: true
-    data:
-      turn_on: [0xFE, 0x02, 0x27, 0x0A, 0x01, 0x01, 0x2F]
-      turn_off: [0xFE, 0x02, 0x27, 0x0A, 0x01, 0x00, 0x2E]
-    uart_id: uart_bus
-    restore_mode: ALWAYS_OFF
-
 text_sensor:
   - platform: ethernet_info
     ip_address:
@@ -310,12 +292,6 @@ uart:
   rx_pin: ${uart_rx_pin}
   tx_pin: ${uart_tx_pin}
   baud_rate: ${uart_baud_rate}
-### Serial Bridge Settings
-stream_server:
-  uart_id: uart_bus
-  id: s_s
-  port: ${tcp_serial_port}
-
 ### Auto Discovery via mDNS
 mdns:
   services:

@@ -13,6 +13,7 @@
 #include "esphome/components/uart/uart.h"
 
 #include "protocol.h"
+#include "zigbee_tcp_server.h"
 
 namespace esphome {
 namespace zigbee_gateway {
@@ -23,6 +24,11 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void set_bsl_pin(GPIOPin *pin) { this->bsl_pin_ = pin; }
   void set_socket_connected_binary_sensor(binary_sensor::BinarySensor *sensor) {
     this->socket_connected_binary_sensor_ = sensor;
+    this->tcp_server_.set_connected_sensor(sensor);
+  }
+  void set_connection_count_sensor(sensor::Sensor *sensor) {
+    this->connection_count_sensor_ = sensor;
+    this->tcp_server_.set_connection_count_sensor(sensor);
   }
   void set_ip_address_text_sensor(text_sensor::TextSensor *sensor) { this->ip_address_text_sensor_ = sensor; }
 
@@ -41,7 +47,18 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void set_ext_pan_id_text_sensor(text_sensor::TextSensor *sensor) { this->ext_pan_id_text_sensor_ = sensor; }
   void set_hardware_text_sensor(text_sensor::TextSensor *sensor) { this->hardware_text_sensor_ = sensor; }
 
-  void set_tcp_port(uint16_t port) { this->tcp_port_ = port; }
+  void set_tcp_port(uint16_t port) {
+    this->tcp_port_ = port;
+    this->tcp_server_.set_port(port);
+  }
+  void set_pending_socket_timeout(uint32_t value) {
+    this->pending_socket_timeout_ms_ = value;
+    this->tcp_server_.set_pending_timeout(value);
+  }
+  void set_parked_socket_timeout(uint32_t value) {
+    this->parked_socket_timeout_ms_ = value;
+    this->tcp_server_.set_park_timeout(value);
+  }
   void set_reset_timeout(uint32_t value) { this->reset_timeout_ms_ = value; }
   void set_znp_start_timeout(uint32_t value) { this->znp_start_timeout_ms_ = value; }
   void set_znp_byte_timeout(uint32_t value) { this->znp_byte_timeout_ms_ = value; }
@@ -64,6 +81,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void setup() override;
   void loop() override;
   void dump_config() override;
+  void on_shutdown() override;
   float get_setup_priority() const override { return setup_priority::DATA; }
 
   /// User-facing control entry points. These defer work to the component loop
@@ -121,6 +139,10 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void process_async_reset_();
   void request_bsl_();
   void request_router_rejoin_();
+  void enter_bsl_for_remote_();
+  void reset_for_remote_();
+  void on_tcp_normal_session_started_();
+  void on_tcp_maintenance_finished_();
 
   bool detect_chip_info_(ChipInfo *chip);
   bool read_memory_word_(uint32_t address, const char *name, uint8_t out[4]);
@@ -138,9 +160,12 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
 
   void register_web_handlers_();
 
+  friend class ZigbeeTcpServer;
+
   GPIOPin *reset_pin_{nullptr};
   GPIOPin *bsl_pin_{nullptr};
   binary_sensor::BinarySensor *socket_connected_binary_sensor_{nullptr};
+  sensor::Sensor *connection_count_sensor_{nullptr};
   text_sensor::TextSensor *ip_address_text_sensor_{nullptr};
 
   sensor::Sensor *flash_size_sensor_{nullptr};
@@ -157,6 +182,8 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *hardware_text_sensor_{nullptr};
 
   uint16_t tcp_port_{6638};
+  uint32_t pending_socket_timeout_ms_{30000};
+  uint32_t parked_socket_timeout_ms_{600000};
   uint32_t reset_timeout_ms_{5000};
   uint32_t znp_start_timeout_ms_{100};
   uint32_t znp_byte_timeout_ms_{10};
@@ -183,6 +210,9 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   uint8_t reset_parser_cmd1_{0};
   uint16_t reset_parser_remaining_{0};
   bool web_handlers_registered_{false};
+
+  ZigbeeSerialInterface serial_{};
+  ZigbeeTcpServer tcp_server_{};
 
 #ifdef USE_UART_DEBUGGER
   ZnpSnifferState tx_sniffer_{};

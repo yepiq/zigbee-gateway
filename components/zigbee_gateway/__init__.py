@@ -10,6 +10,7 @@ from esphome.const import (
     DEVICE_CLASS_RESTART,
     DEVICE_CLASS_SIGNAL_STRENGTH,
     ENTITY_CATEGORY_CONFIG,
+    ENTITY_CATEGORY_DIAGNOSTIC,
     ICON_RESTART,
     STATE_CLASS_MEASUREMENT,
     UNIT_BYTES,
@@ -17,13 +18,16 @@ from esphome.const import (
 )
 
 CODEOWNERS = ["@yepiq"]
-DEPENDENCIES = ["uart"]
-AUTO_LOAD = ["binary_sensor", "button", "sensor", "text_sensor"]
+DEPENDENCIES = ["network", "uart"]
+AUTO_LOAD = ["binary_sensor", "button", "sensor", "socket", "text_sensor"]
 
 CONF_SOCKET_CONNECTED = "socket_connected"
+CONF_CONNECTION_COUNT = "connection_count"
 CONF_BSL_PIN = "bsl_pin"
 CONF_IP_ADDRESS = "ip_address"
 CONF_TCP_PORT = "tcp_port"
+CONF_PENDING_SOCKET_TIMEOUT = "pending_socket_timeout"
+CONF_PARKED_SOCKET_TIMEOUT = "parked_socket_timeout"
 
 CONF_FLASH_SIZE = "flash_size"
 CONF_TX_POWER = "tx_power"
@@ -78,9 +82,24 @@ CONFIG_SCHEMA = cv.All(
             cv.GenerateID(): cv.declare_id(ZigbeeGatewayComponent),
             cv.Required(CONF_RESET_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_BSL_PIN): pins.gpio_output_pin_schema,
-            cv.Required(CONF_SOCKET_CONNECTED): cv.use_id(binary_sensor.BinarySensor),
+            cv.Required(CONF_SOCKET_CONNECTED): binary_sensor.binary_sensor_schema(
+                device_class=DEVICE_CLASS_CONNECTIVITY,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Required(CONF_CONNECTION_COUNT): sensor.sensor_schema(
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_MEASUREMENT,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:counter",
+            ),
             cv.Optional(CONF_IP_ADDRESS): cv.use_id(text_sensor.TextSensor),
             cv.Optional(CONF_TCP_PORT, default=6638): cv.port,
+            cv.Optional(
+                CONF_PENDING_SOCKET_TIMEOUT, default="30s"
+            ): cv.positive_time_period_milliseconds,
+            cv.Optional(
+                CONF_PARKED_SOCKET_TIMEOUT, default="10min"
+            ): cv.positive_time_period_milliseconds,
             cv.Required(CONF_FLASH_SIZE): sensor.sensor_schema(
                 device_class=DEVICE_CLASS_DATA_SIZE,
                 unit_of_measurement=UNIT_BYTES,
@@ -172,11 +191,12 @@ async def to_code(config):
 
     cg.add(var.set_reset_pin(await cg.gpio_pin_expression(config[CONF_RESET_PIN])))
     cg.add(var.set_bsl_pin(await cg.gpio_pin_expression(config[CONF_BSL_PIN])))
-    cg.add(
-        var.set_socket_connected_binary_sensor(
-            await cg.get_variable(config[CONF_SOCKET_CONNECTED])
-        )
+    socket_connected = await binary_sensor.new_binary_sensor(
+        config[CONF_SOCKET_CONNECTED]
     )
+    cg.add(var.set_socket_connected_binary_sensor(socket_connected))
+    connection_count = await sensor.new_sensor(config[CONF_CONNECTION_COUNT])
+    cg.add(var.set_connection_count_sensor(connection_count))
     if CONF_IP_ADDRESS in config:
         cg.add(
             var.set_ip_address_text_sensor(
@@ -217,6 +237,16 @@ async def to_code(config):
         await cg.register_parented(btn, config[CONF_ID])
 
     cg.add(var.set_tcp_port(config[CONF_TCP_PORT]))
+    cg.add(
+        var.set_pending_socket_timeout(
+            config[CONF_PENDING_SOCKET_TIMEOUT].total_milliseconds
+        )
+    )
+    cg.add(
+        var.set_parked_socket_timeout(
+            config[CONF_PARKED_SOCKET_TIMEOUT].total_milliseconds
+        )
+    )
     cg.add(var.set_reset_timeout(config[CONF_RESET_TIMEOUT].total_milliseconds))
     cg.add(
         var.set_znp_start_timeout(
@@ -262,6 +292,6 @@ async def to_code(config):
         )
     )
 
-    # UART debug callbacks are used only as a passive tap. They do not consume
-    # bytes and therefore do not settle the future UART ownership question.
+    # UART debug callbacks are a passive tap. Reads and writes are exclusively
+    # gated by the component's ZigbeeSerialInterface.
     cg.add_define("USE_UART_DEBUGGER")

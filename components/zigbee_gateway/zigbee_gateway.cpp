@@ -44,6 +44,16 @@ class GatewayCommandHandler : public web_server_idf::AsyncWebHandler {
 void ZigbeeGatewayComponent::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Zigbee Gateway...");
 
+  this->serial_.set_uart(this->parent_);
+  this->serial_.set_owner(ZigbeeSerialInterface::Owner::LOCAL);
+  this->tcp_server_.set_parent(this);
+  this->tcp_server_.set_serial(&this->serial_);
+  this->tcp_server_.set_port(this->tcp_port_);
+  this->tcp_server_.set_pending_timeout(this->pending_socket_timeout_ms_);
+  this->tcp_server_.set_park_timeout(this->parked_socket_timeout_ms_);
+  this->tcp_server_.set_connected_sensor(this->socket_connected_binary_sensor_);
+  this->tcp_server_.set_connection_count_sensor(this->connection_count_sensor_);
+
   this->reset_pin_->setup();
   this->bsl_pin_->setup();
   // Both pins are configured inverted for UZG-01. Writing false means the
@@ -53,20 +63,23 @@ void ZigbeeGatewayComponent::setup() {
 
 #ifdef USE_UART_DEBUGGER
   // Passive byte tap only: this callback observes TX/RX but never consumes RX.
-  // UART ownership remains intentionally unresolved until the streaming-server
-  // design phase.
+  // All consuming reads and writes still pass through ZigbeeSerialInterface.
   this->parent_->add_debug_callback(
       [this](uart::UARTDirection direction, uint8_t byte) { this->sniff_byte_(direction, byte); });
 #endif
 
   // Preserve the working configuration's priority-600 startup behavior:
-  // identify the chip and inspect NV before the legacy stream server starts,
-  // then return the radio to its normal firmware.
+  // identify the chip and inspect NV before this component starts accepting
+  // TCP clients, then return the radio to its normal firmware.
   this->startup_probe_();
+  this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
 }
 
 void ZigbeeGatewayComponent::loop() {
   this->register_web_handlers_();
+  if (!this->tcp_server_.is_started())
+    this->tcp_server_.start();
+  this->tcp_server_.loop();
   if (this->async_reset_active_)
     this->process_async_reset_();
 }
@@ -76,15 +89,18 @@ void ZigbeeGatewayComponent::dump_config() {
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  BSL Pin: ", this->bsl_pin_);
   ESP_LOGCONFIG(TAG, "  TCP compatibility port: %u", (unsigned) this->tcp_port_);
+  ESP_LOGCONFIG(TAG, "  Pending socket timeout: %u ms", (unsigned) this->pending_socket_timeout_ms_);
+  ESP_LOGCONFIG(TAG, "  Parked socket timeout: %u ms", (unsigned) this->parked_socket_timeout_ms_);
   ESP_LOGCONFIG(TAG, "  NV CC13x2/CC26x2: base=0x%08X size=0x%08X", (unsigned) this->nv_base_cc26x2_,
                 (unsigned) this->nv_size_cc26x2_);
   ESP_LOGCONFIG(TAG, "  NV CC13x2x7/CC26x2x7: base=0x%08X size=0x%08X",
                 (unsigned) this->nv_base_cc26x2x7_, (unsigned) this->nv_size_cc26x2x7_);
 }
 
+void ZigbeeGatewayComponent::on_shutdown() { this->tcp_server_.shutdown(); }
+
 bool ZigbeeGatewayComponent::socket_connected_() const {
-  return this->socket_connected_binary_sensor_ != nullptr && this->socket_connected_binary_sensor_->has_state() &&
-         this->socket_connected_binary_sensor_->state;
+  return this->tcp_server_.has_any_client();
 }
 
 void ZigbeeGatewayComponent::publish_role_(const char *role) {
@@ -100,7 +116,7 @@ void ZigbeeGatewayComponent::startup_probe_() {
     ESP_LOGW(TAG, "Socket client connected; skipping BSL chip probe to avoid UART contention.");
   } else {
     this->enter_bsl_blocking_();
-    if (!bsl_sync(this->parent_, this->bsl_ack_timeout_ms_, this->bsl_sync_gap_ms_)) {
+    if (!bsl_sync(&this->serial_, this->bsl_ack_timeout_ms_, this->bsl_sync_gap_ms_)) {
       ESP_LOGW(TAG, "Failed to SYNC with BSL");
     } else {
       ChipInfo chip;
@@ -161,7 +177,7 @@ bool ZigbeeGatewayComponent::wait_for_reset_ind_blocking_() {
   uint8_t payload[256] = {0};
 
   while (millis() - started < this->reset_timeout_ms_) {
-    if (znp_recv_once(this->parent_, &cmd0, &cmd1, payload, sizeof(payload), &length,
+    if (znp_recv_once(&this->serial_, &cmd0, &cmd1, payload, sizeof(payload), &length,
                       std::min<uint32_t>(this->znp_start_timeout_ms_, 20), this->znp_byte_timeout_ms_)) {
       if (cmd0 == 0x41 && cmd1 == 0x80)
         return true;
@@ -203,6 +219,17 @@ void ZigbeeGatewayComponent::request_restart_() {
     return;
   }
 
+  if (this->tcp_server_.has_any_client()) {
+    // Preserve the current TCP owner and forward the radio's reset indication
+    // to it. Local diagnostics must not race that client for the same bytes.
+    this->tcp_server_.request_reset();
+    return;
+  }
+  if (!this->serial_.claim(ZigbeeSerialInterface::Owner::LOCAL)) {
+    ESP_LOGW(TAG, "UART is owned by another operation; restart request ignored.");
+    return;
+  }
+
   ESP_LOGI(TAG, "Resetting Zigbee module.");
   this->operation_active_ = true;
   this->reset_pin_->digital_write(true);
@@ -221,7 +248,7 @@ void ZigbeeGatewayComponent::process_async_reset_() {
   // loops from the working baseline while preserving SYS_RESET_IND detection.
   uint8_t byte = 0;
   uint8_t consumed = 0;
-  while (consumed < 64 && this->parent_->available() && this->parent_->read_byte(&byte)) {
+  while (consumed < 64 && this->serial_.available() && this->serial_.read_byte(&byte)) {
     consumed++;
     switch (this->reset_parser_state_) {
       case ResetParserState::SEEK_SOF:
@@ -269,11 +296,21 @@ void ZigbeeGatewayComponent::finish_async_restart_(bool reset_ind_seen) {
   ESP_LOGI(TAG, "Zigbee module has been reset.");
   this->run_post_reset_diagnostics_();
   this->operation_active_ = false;
+  this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
 }
 
 void ZigbeeGatewayComponent::request_bsl_() {
   if (this->operation_active_) {
     ESP_LOGW(TAG, "Another Zigbee operation is active; BSL request ignored.");
+    return;
+  }
+
+  if (this->tcp_server_.is_started()) {
+    this->tcp_server_.request_bsl();
+    return;
+  }
+  if (!this->serial_.claim(ZigbeeSerialInterface::Owner::LOCAL)) {
+    ESP_LOGW(TAG, "UART is owned by another operation; BSL request ignored.");
     return;
   }
 
@@ -289,6 +326,7 @@ void ZigbeeGatewayComponent::request_bsl_() {
       this->bsl_pin_->digital_write(false);
       this->set_timeout("zigbee_bsl_settle", 100, [this]() {
         this->operation_active_ = false;
+        this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
         if (this->ip_address_text_sensor_ != nullptr && this->ip_address_text_sensor_->has_state()) {
           ESP_LOGI(TAG,
                    "Zigbee is in BSL mode. To update firmware, run: "
@@ -325,6 +363,36 @@ void ZigbeeGatewayComponent::request_router_rejoin_() {
   });
 }
 
+void ZigbeeGatewayComponent::enter_bsl_for_remote_() {
+  // The TCP server has already selected the exclusive maintenance owner and
+  // quarantined any normal client. Keep the raw stream opaque: only manipulate
+  // the radio pins here; the external tool owns every following BSL byte.
+  this->enter_bsl_blocking_();
+}
+
+void ZigbeeGatewayComponent::reset_for_remote_() {
+  // Compatibility reset used by /cmdZigRST. Do not consume SYS_RESET_IND or
+  // run local ZNP diagnostics: the active TCP client must receive all UART
+  // bytes, and may continue with application-mode requests on the same socket.
+  ESP_LOGI(TAG, "Resetting Zigbee module for remote TCP owner.");
+  this->reset_pin_->digital_write(true);
+  delay(15);
+  this->reset_pin_->digital_write(false);
+}
+
+void ZigbeeGatewayComponent::on_tcp_normal_session_started_() {
+  this->sniffer_enabled_ = true;
+}
+
+void ZigbeeGatewayComponent::on_tcp_maintenance_finished_() {
+  // Transparent BSL access can replace coordinator firmware with router
+  // firmware (or vice versa) without the ESP32 observing the image. Invalidate
+  // the cached role until a later explicit diagnostic pass establishes it.
+  this->publish_role_("Unknown");
+  this->sniffer_enabled_ = true;
+  ESP_LOGI(TAG, "Maintenance transport ended; awaiting a clean client restart.");
+}
+
 void ZigbeeGatewayComponent::get_device_info_() {
   ESP_LOGI(TAG, "Get Zigbee IEEE Address");
   if (this->socket_connected_()) {
@@ -334,7 +402,7 @@ void ZigbeeGatewayComponent::get_device_info_() {
 
   uint8_t buffer[16] = {0};
   const bool ok = znp_exec(
-      this->parent_,
+      &this->serial_,
       /* SREQ */ 0x27, 0x00,
       /* expected SRSP */ 0x67, 0x00,
       [this](const uint8_t *data, uint8_t length) {
@@ -383,7 +451,7 @@ void ZigbeeGatewayComponent::get_firmware_version_() {
 
   uint8_t buffer[16] = {0};
   const bool ok = znp_exec(
-      this->parent_,
+      &this->serial_,
       /* SREQ */ 0x21, 0x02,
       /* expected SRSP */ 0x61, 0x02,
       [this](const uint8_t *data, uint8_t length) {
@@ -418,7 +486,7 @@ void ZigbeeGatewayComponent::get_firmware_version_() {
 
 bool ZigbeeGatewayComponent::read_memory_word_(uint32_t address, const char *name, uint8_t out[4]) {
   uint8_t length = 0;
-  const bool ok = bsl_mem_read(this->parent_, address, /* width */ 1, /* count */ 1, out, 4, &length,
+  const bool ok = bsl_mem_read(&this->serial_, address, /* width */ 1, /* count */ 1, out, 4, &length,
                                this->bsl_ack_timeout_ms_, this->bsl_header_timeout_ms_,
                                this->bsl_payload_timeout_ms_, 1);
   if (!ok || length < 4) {
@@ -446,7 +514,7 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
   const uint8_t get_chip_id[] = {0x03, 0x28, 0x28};
   uint8_t response[16] = {0};
   const bool chip_id_ok = bsl_exec(
-      this->parent_, get_chip_id, sizeof(get_chip_id),
+      &this->serial_, get_chip_id, sizeof(get_chip_id),
       [chip](const uint8_t *payload, uint8_t length) {
         if (length < 4)
           return;
@@ -817,7 +885,7 @@ void ZigbeeGatewayComponent::scan_nv_(ChipFamily family) {
   // protocol.h owns the detailed NVOCMP page/header/item layout, active-item
   // filtering, CRC-8 validation, and BSL windowed reads. This frontend only
   // selects and decodes the three diagnostic items above.
-  nzg_nv_scan_and_dispatch(this->parent_, config, wanted, WANTED_COUNT, frontend);
+  nzg_nv_scan_and_dispatch(&this->serial_, config, wanted, WANTED_COUNT, frontend);
 }
 
 #ifdef USE_UART_DEBUGGER
@@ -920,8 +988,8 @@ void ZigbeeGatewayComponent::register_web_handlers_() {
     return;
 
   // Compatibility endpoints retained from the working gateway/XZG behavior.
-  // They schedule pin-control actions only; remote BSL payload remains an
-  // opaque byte stream handled by the TCP bridge and the external flash tool.
+  // The command is coordinated with the TCP session manager before pins move;
+  // remote BSL payload remains opaque and owned by the external flash tool.
   server->add_handler(new GatewayCommandHandler("/cmdZigBSL", [this]() { this->request_bsl(); }));
   server->add_handler(new GatewayCommandHandler("/cmdZigRST", [this]() { this->request_restart(); }));
   ESP_LOGI(TAG, "Registered web endpoints: /cmdZigBSL, /cmdZigRST");
