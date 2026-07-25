@@ -20,6 +20,38 @@ namespace zigbee_gateway {
 
 static const char *const TAG = "zigbee_gateway";
 
+static void format_ieee_lsb_(const uint8_t ieee_lsb[8], char output[24]) {
+  snprintf(output, 24, "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X",
+           ieee_lsb[7], ieee_lsb[6], ieee_lsb[5], ieee_lsb[4],
+           ieee_lsb[3], ieee_lsb[2], ieee_lsb[1], ieee_lsb[0]);
+}
+
+static void format_extended_pan_decimal_lsb_(const uint8_t extended_pan_lsb[8], char output[40]) {
+  size_t position = 0;
+  output[0] = '\0';
+  for (size_t index = 0; index < 8; index++) {
+    const int written = snprintf(output + position, 40 - position,
+                                 index < 7 ? "%u " : "%u",
+                                 static_cast<unsigned>(extended_pan_lsb[index]));
+    if (written < 0 || static_cast<size_t>(written) >= 40 - position)
+      return;
+    position += static_cast<size_t>(written);
+  }
+}
+
+static const char *znp_device_type_name_(uint8_t device_type) {
+  switch (device_type) {
+    case 0x00:
+      return "Coordinator";
+    case 0x01:
+      return "Router";
+    case 0x02:
+      return "End Device";
+    default:
+      return "Unknown";
+  }
+}
+
 #if defined(USE_WEBSERVER) && defined(USE_NETWORK)
 class GatewayCommandHandler : public web_server_idf::AsyncWebHandler {
  public:
@@ -83,6 +115,11 @@ void ZigbeeGatewayComponent::loop() {
   if (!this->tcp_server_.is_started())
     this->tcp_server_.start();
   this->tcp_server_.loop();
+#ifdef USE_UART_DEBUGGER
+  // UART debug callbacks execute synchronously inside reads/writes. Apply HA
+  // publications and preference writes only after the TCP pump returns.
+  this->process_znp_observations_();
+#endif
   if (this->async_reset_active_)
     this->process_async_reset_();
 }
@@ -326,14 +363,16 @@ bool ZigbeeGatewayComponent::save_network_snapshot_cache_() {
 }
 
 bool ZigbeeGatewayComponent::mark_running_image_pending_() {
-  if (!this->running_image_available_) {
-    initialize_running_image_cache(&this->running_image_);
-    this->running_image_available_ = true;
-  }
+  // A transparent flash can replace every image-owned value. Retain the
+  // physical and network records, but do not present the old firmware/role/
+  // active IEEE/CCFG fields as belonging to the new image.
+  const uint32_t next_generation = this->running_image_.generation + 1;
+  initialize_running_image_cache(&this->running_image_, next_generation);
   this->running_image_.awaiting_observation = 1;
+  this->running_image_available_ = true;
   const bool saved = this->save_running_image_cache_();
-  this->publish_metadata_status_(
-      this->running_image_.known != 0 ? "Awaiting Observation" : "Unavailable");
+  this->publish_running_image_(this->running_image_);
+  this->publish_metadata_status_("Awaiting Observation");
   if (this->network_snapshot_available_ && this->network_snapshot_.known != 0)
     this->publish_network_information_status_("Cached");
   if (!saved)
@@ -427,7 +466,7 @@ bool ZigbeeGatewayComponent::refresh_metadata_() {
     initialize_physical_identity_cache(
         &this->physical_identity_candidate_, this->physical_identity_.generation + 1);
   initialize_running_image_cache(
-      &this->running_image_candidate_, this->running_image_.generation + 1);
+      &this->running_image_candidate_, this->running_image_.generation);
   this->running_image_candidate_.awaiting_observation = 1;
   initialize_network_snapshot_cache(
       &this->network_snapshot_candidate_, this->network_snapshot_.generation + 1);
@@ -876,28 +915,17 @@ void ZigbeeGatewayComponent::get_device_info_() {
       /* SREQ */ 0x27, 0x00,
       /* expected SRSP */ 0x67, 0x00,
       [this](const uint8_t *data, uint8_t length) {
-        if (length != 14)
+        if (length < 14 || data[0] != 0x00)
           return;
 
-        // UTIL_GET_DEVICE_INFO returns devType followed by the local IEEE
-        // address in least-significant-byte-first order.
+        // UTIL_GET_DEVICE_INFO returns status, local IEEE in
+        // least-significant-byte-first order, short address, device type,
+        // device state, and the associated-device list.
         char ieee[24];
-        snprintf(ieee, sizeof(ieee), "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X", data[8], data[7], data[6],
-                 data[5], data[4], data[3], data[2], data[1]);
+        format_ieee_lsb_(&data[1], ieee);
         this->publish_self_ieee_(ieee);
 
-        const char *role = "Unknown";
-        switch (data[0]) {
-          case 0x00:
-            role = "Coordinator";
-            break;
-          case 0x01:
-            role = "Router";
-            break;
-          case 0x02:
-            role = "End Device";
-            break;
-        }
+        const char *role = znp_device_type_name_(data[11]);
         this->publish_role_(role);
         ESP_LOGI(TAG, "UTIL_GET_DEVICE_INFO -> IEEE: %s, Role: %s", ieee, role);
       },
@@ -924,7 +952,7 @@ void ZigbeeGatewayComponent::get_firmware_version_() {
       /* SREQ */ 0x21, 0x02,
       /* expected SRSP */ 0x61, 0x02,
       [this](const uint8_t *data, uint8_t length) {
-        if (length != 10)
+        if (length < 9)
           return;
 
         const uint8_t major = data[2];
@@ -1356,6 +1384,171 @@ void ZigbeeGatewayComponent::reset_sniffer_(ZnpSnifferState &state) {
   state.index = 0;
 }
 
+void ZigbeeGatewayComponent::queue_znp_observation_(const ZnpObservation &observation) {
+  // Passive observation is valid only for the transparent normal owner. Local
+  // diagnostics already publish their own results, and maintenance bytes must
+  // remain completely opaque.
+  if (this->serial_.owner() != ZigbeeSerialInterface::Owner::TCP_NORMAL)
+    return;
+  if (this->pending_znp_observation_count_ == this->pending_znp_observations_.size()) {
+    // Keep the most recent ordered observations if one unusually busy TCP
+    // pump contains more recognized frames than the fixed queue can hold.
+    std::move(this->pending_znp_observations_.begin() + 1,
+              this->pending_znp_observations_.end(),
+              this->pending_znp_observations_.begin());
+    this->pending_znp_observation_count_--;
+  }
+  this->pending_znp_observations_[this->pending_znp_observation_count_++] = observation;
+}
+
+void ZigbeeGatewayComponent::process_znp_observations_() {
+  const size_t count = this->pending_znp_observation_count_;
+  this->pending_znp_observation_count_ = 0;
+  for (size_t index = 0; index < count; index++)
+    this->apply_znp_observation_(this->pending_znp_observations_[index]);
+}
+
+void ZigbeeGatewayComponent::apply_znp_observation_(const ZnpObservation &observation) {
+  const auto prepare_running_image = [this]() {
+    if (this->running_image_available_)
+      return;
+    initialize_running_image_cache(&this->running_image_, 1);
+    this->running_image_.awaiting_observation = 1;
+    this->running_image_available_ = true;
+  };
+  const auto finish_running_image_update = [this](bool changed) {
+    const uint32_t required = RUNNING_IMAGE_FIRMWARE | RUNNING_IMAGE_STACK |
+                              RUNNING_IMAGE_ACTIVE_IEEE | RUNNING_IMAGE_ROLE;
+    const bool complete = (this->running_image_.known & required) == required;
+    const bool pending_changed = complete && this->running_image_.awaiting_observation != 0;
+    if (complete)
+      this->running_image_.awaiting_observation = 0;
+    if (changed || pending_changed) {
+      this->running_image_.generation++;
+      if (!this->save_running_image_cache_())
+        ESP_LOGE(TAG, "Could not persist passively observed running-image information.");
+    }
+    this->publish_running_image_(this->running_image_);
+    this->publish_metadata_status_(complete ? "Observed" : "Awaiting Observation");
+  };
+  const auto prepare_network_snapshot = [this]() {
+    if (this->network_snapshot_available_)
+      return;
+    initialize_network_snapshot_cache(&this->network_snapshot_, 1);
+    this->network_snapshot_available_ = true;
+  };
+  const auto finish_network_update = [this](bool changed, bool complete_observation) {
+    if (changed) {
+      this->network_snapshot_.generation++;
+      if (!this->save_network_snapshot_cache_())
+        ESP_LOGE(TAG, "Could not persist passively observed Zigbee network information.");
+    }
+    if (complete_observation)
+      this->network_observed_this_boot_ = true;
+    this->publish_network_snapshot_(this->network_snapshot_);
+    this->publish_network_information_status_(
+        this->network_observed_this_boot_ ? "Observed" :
+        (this->network_snapshot_.known != 0 ? "Cached" : "Unavailable"));
+  };
+
+  switch (observation.type) {
+    case ZnpObservationType::SYS_VERSION: {
+      prepare_running_image();
+      const std::string firmware = std::to_string(observation.revision);
+      char stack[16];
+      snprintf(stack, sizeof(stack), "%u.%u.%u", observation.major,
+               observation.minor, observation.maintenance);
+      const bool changed =
+          (this->running_image_.known & RUNNING_IMAGE_FIRMWARE) == 0 ||
+          std::strcmp(this->running_image_.firmware, firmware.c_str()) != 0 ||
+          (this->running_image_.known & RUNNING_IMAGE_STACK) == 0 ||
+          std::strcmp(this->running_image_.stack, stack) != 0;
+      copy_zigbee_cache_text(this->running_image_.firmware, firmware.c_str());
+      copy_zigbee_cache_text(this->running_image_.stack, stack);
+      this->running_image_.known |= RUNNING_IMAGE_FIRMWARE | RUNNING_IMAGE_STACK;
+      ESP_LOGI(TAG, "Passively observed SYS_VERSION -> build=%s stack=%s",
+               firmware.c_str(), stack);
+      finish_running_image_update(changed);
+      return;
+    }
+
+    case ZnpObservationType::UTIL_DEVICE_INFO: {
+      prepare_running_image();
+      char ieee[24];
+      format_ieee_lsb_(observation.active_ieee_lsb.data(), ieee);
+      const char *role = znp_device_type_name_(observation.device_type);
+      const bool changed =
+          (this->running_image_.known & RUNNING_IMAGE_ACTIVE_IEEE) == 0 ||
+          std::strcmp(this->running_image_.active_ieee, ieee) != 0 ||
+          (this->running_image_.known & RUNNING_IMAGE_ROLE) == 0 ||
+          std::strcmp(this->running_image_.role, role) != 0;
+      copy_zigbee_cache_text(this->running_image_.active_ieee, ieee);
+      copy_zigbee_cache_text(this->running_image_.role, role);
+      this->running_image_.known |= RUNNING_IMAGE_ACTIVE_IEEE | RUNNING_IMAGE_ROLE;
+      ESP_LOGI(TAG, "Passively observed UTIL_GET_DEVICE_INFO -> IEEE=%s role=%s",
+               ieee, role);
+      finish_running_image_update(changed);
+
+      prepare_network_snapshot();
+      const bool on_network = znp_device_state_is_on_network(observation.device_state);
+      const bool network_changed =
+          (this->network_snapshot_.known & NETWORK_SNAPSHOT_ON_NETWORK) == 0 ||
+          this->network_snapshot_.on_network != static_cast<uint8_t>(on_network);
+      this->network_snapshot_.on_network = on_network;
+      this->network_snapshot_.known |= NETWORK_SNAPSHOT_ON_NETWORK;
+      finish_network_update(network_changed, false);
+      return;
+    }
+
+    case ZnpObservationType::ZDO_EXT_NETWORK_INFO: {
+      prepare_network_snapshot();
+      char parent_ieee[24];
+      char extended_pan[40];
+      format_ieee_lsb_(observation.parent_ieee_lsb.data(), parent_ieee);
+      format_extended_pan_decimal_lsb_(observation.extended_pan_id_lsb.data(), extended_pan);
+      const bool on_network = znp_device_state_is_on_network(observation.device_state);
+      const uint32_t required = NETWORK_SNAPSHOT_PAN_ID | NETWORK_SNAPSHOT_CHANNEL |
+                                NETWORK_SNAPSHOT_ON_NETWORK | NETWORK_SNAPSHOT_PARENT_IEEE |
+                                NETWORK_SNAPSHOT_EXTENDED_PAN_ID;
+      const bool changed =
+          (this->network_snapshot_.known & required) != required ||
+          this->network_snapshot_.pan_id != observation.pan_id ||
+          this->network_snapshot_.channel != observation.channel ||
+          this->network_snapshot_.on_network != static_cast<uint8_t>(on_network) ||
+          std::strcmp(this->network_snapshot_.parent_ieee, parent_ieee) != 0 ||
+          std::strcmp(this->network_snapshot_.extended_pan_id, extended_pan) != 0;
+      this->network_snapshot_.pan_id = observation.pan_id;
+      this->network_snapshot_.channel = observation.channel;
+      this->network_snapshot_.on_network = on_network;
+      copy_zigbee_cache_text(this->network_snapshot_.parent_ieee, parent_ieee);
+      copy_zigbee_cache_text(this->network_snapshot_.extended_pan_id, extended_pan);
+      this->network_snapshot_.known |= required;
+      ESP_LOGI(TAG,
+               "Passively observed ZDO_EXT_NWK_INFO -> PAN=0x%04X channel=%u parent=%s",
+               observation.pan_id, observation.channel, parent_ieee);
+      finish_network_update(changed, true);
+      return;
+    }
+
+    case ZnpObservationType::ZDO_STATE_CHANGE: {
+      prepare_network_snapshot();
+      const bool on_network = znp_device_state_is_on_network(observation.device_state);
+      const bool changed =
+          (this->network_snapshot_.known & NETWORK_SNAPSHOT_ON_NETWORK) == 0 ||
+          this->network_snapshot_.on_network != static_cast<uint8_t>(on_network);
+      this->network_snapshot_.on_network = on_network;
+      this->network_snapshot_.known |= NETWORK_SNAPSHOT_ON_NETWORK;
+      ESP_LOGI(TAG, "Passively observed ZDO_STATE_CHANGE_IND -> state=%u on_network=%s",
+               observation.device_state, YESNO(on_network));
+      finish_network_update(changed, false);
+      return;
+    }
+
+    case ZnpObservationType::NONE:
+      return;
+  }
+}
+
 void ZigbeeGatewayComponent::sniff_byte_(uart::UARTDirection direction, uint8_t byte) {
   if (!this->sniffer_enabled_) {
     this->reset_sniffer_(this->tx_sniffer_);
@@ -1390,10 +1583,8 @@ void ZigbeeGatewayComponent::sniff_byte_(uart::UARTDirection direction, uint8_t 
         state.state = 5;
       return;
     case 5: {  // FCS
-      uint8_t expected_fcs = state.length ^ state.cmd0 ^ state.cmd1;
-      for (uint16_t index = 0; index < state.length; index++)
-        expected_fcs ^= state.payload[index];
-      const bool fcs_ok = expected_fcs == byte;
+      const bool fcs_ok =
+          znp_frame_fcs_valid(state.length, state.cmd0, state.cmd1, state.payload.data(), byte);
 
       char payload_hex[128] = {0};
       size_t position = 0;
@@ -1406,6 +1597,13 @@ void ZigbeeGatewayComponent::sniff_byte_(uart::UARTDirection direction, uint8_t 
       ESP_LOGV("znp-sniff", "[%s] %s sub=0x%02X cmd1=0x%02X len=%u fcs=%s payload=%s",
                direction == uart::UART_DIRECTION_TX ? "TX" : "RX", type_name, state.cmd0 & 0x1F, state.cmd1,
                state.length, fcs_ok ? "OK" : "BAD", payload_hex);
+
+      if (fcs_ok && direction == uart::UART_DIRECTION_RX) {
+        ZnpObservation observation;
+        if (decode_znp_observation(state.cmd0, state.cmd1, state.payload.data(),
+                                   state.length, &observation))
+          this->queue_znp_observation_(observation);
+      }
 
       if (fcs_ok && command_type == 1 && (state.cmd0 & 0x1F) == 0x01) {
         // Genuine Yepiq diagnostic: passively observe both supported ZNP

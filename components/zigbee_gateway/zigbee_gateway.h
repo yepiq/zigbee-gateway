@@ -16,6 +16,7 @@
 #include "protocol.h"
 #include "zigbee_metadata_cache.h"
 #include "zigbee_tcp_server.h"
+#include "zigbee_znp_observer.h"
 
 namespace esphome {
 namespace zigbee_gateway {
@@ -217,6 +218,9 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
 #ifdef USE_UART_DEBUGGER
   void sniff_byte_(uart::UARTDirection direction, uint8_t byte);
   void reset_sniffer_(ZnpSnifferState &state);
+  void queue_znp_observation_(const ZnpObservation &observation);
+  void process_znp_observations_();
+  void apply_znp_observation_(const ZnpObservation &observation);
 #endif
 
   void register_web_handlers_();
@@ -278,6 +282,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   bool running_image_available_{false};
   bool network_snapshot_available_{false};
   bool metadata_capture_active_{false};
+  bool network_observed_this_boot_{false};
 
   ESPPreferenceObject physical_identity_preference_{};
   ESPPreferenceObject running_image_preference_{};
@@ -295,6 +300,8 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
 #ifdef USE_UART_DEBUGGER
   ZnpSnifferState tx_sniffer_{};
   ZnpSnifferState rx_sniffer_{};
+  std::array<ZnpObservation, 8> pending_znp_observations_{};
+  size_t pending_znp_observation_count_{0};
 #endif
 };
 

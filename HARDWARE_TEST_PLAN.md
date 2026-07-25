@@ -65,9 +65,9 @@ maintenance window and a recovery method.
   radio firmware and Zigbee2MQTT information.
 - Expected: Supported values agree; unavailable or inapplicable values are
   reported as unknown rather than fabricated. Zigbee Metadata Status accurately
-  reports `Restored`, `Refreshing`, `Verified`, `Awaiting Observation`, or
-  `Unavailable`. Zigbee Network Information Status accurately reports
-  `Cached`, `Observed`, `Refreshed`, or `Unavailable`.
+  reports `Restored`, `Refreshing`, `Verified`, `Observed`,
+  `Awaiting Observation`, or `Unavailable`. Zigbee Network Information Status
+  accurately reports `Cached`, `Observed`, `Refreshed`, or `Unavailable`.
 
 ### BAS-04 — ESP32 OTA update
 
@@ -167,6 +167,50 @@ maintenance window and a recovery method.
   available and unchanged. Only the running-image record reports
   `Awaiting Observation`; the previous network values remain visible with
   Network Information Status `Cached`.
+
+## Passive ZNP information observation
+
+Run `tests/zigbee_znp_observer_test.cpp` after every change to the observed ZNP
+command layouts. The fixture suite validates UNPI FCS handling and exact
+payload boundaries for `SYS_VERSION`, `UTIL_GET_DEVICE_INFO`,
+`ZDO_EXT_NWK_INFO`, and `ZDO_STATE_CHANGE_IND`.
+
+### OBS-01 — Running image observed from normal startup
+
+- Status: `NOT RUN`
+- Procedure: Mark the running image pending through a maintenance session, then
+  let Zigbee2MQTT reconnect while capturing verbose ZNP logs.
+- Expected: The gateway only observes already-forwarded `SYS_VERSION` and
+  `UTIL_GET_DEVICE_INFO` responses. Firmware build, stack, active IEEE, and
+  role update; Metadata Status becomes `Observed`; factory IEEE and physical
+  identity remain unchanged. No additional UART request is transmitted.
+
+### OBS-02 — Full network snapshot observed
+
+- Status: `NOT RUN`
+- Procedure: Restart Zigbee2MQTT against a running coordinator and capture its
+  `ZDO_EXT_NWK_INFO` exchange.
+- Expected: PAN ID, channel, parent IEEE, extended PAN ID, and joined state
+  match Zigbee2MQTT. Network Information Status becomes `Observed`; one
+  last-known snapshot is persisted.
+
+### OBS-03 — Live network state indication
+
+- Status: `NOT RUN`
+- Procedure: Cause a valid `ZDO_STATE_CHANGE_IND` while the normal client owns
+  UART.
+- Expected: Joined state updates from the indication without any local UART
+  request. A partial state indication alone does not claim that an otherwise
+  cached full network snapshot was freshly observed.
+
+### OBS-04 — Invalid and out-of-scope frames are ignored
+
+- Status: `NOT RUN`
+- Procedure: Exercise malformed/short frames in the host fixture and observe a
+  maintenance session on hardware.
+- Expected: Bad-FCS, failed-status, short, and unrelated ZNP frames cannot
+  update information. Maintenance traffic remains opaque, and local diagnostic
+  exchanges do not enter the passive persistence path.
 
 ## Host transport state tests
 
