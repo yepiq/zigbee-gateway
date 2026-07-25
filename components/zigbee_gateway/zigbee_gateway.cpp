@@ -669,6 +669,62 @@ void ZigbeeGatewayComponent::reset_for_remote_() {
 
 void ZigbeeGatewayComponent::on_tcp_normal_session_started_() {
   this->sniffer_enabled_ = true;
+  this->set_radio_connection_led_(true);
+}
+
+void ZigbeeGatewayComponent::on_tcp_normal_session_finished_() {
+  this->set_radio_connection_led_(false);
+}
+
+bool ZigbeeGatewayComponent::set_radio_connection_led_(bool on) {
+  // The UZG-01 yellow/white indicator is Zigbee-radio LED1, not an ESP32
+  // GPIO. XZG preserves the same hardware behavior with the ZNP
+  // UTIL_LED_CONTROL command:
+  //
+  //   SREQ  0x27/0x0A { LED1=0x01, OFF=0x00 | ON=0x01 }
+  //   SRSP  0x67/0x0A { status=0x00 }
+  //
+  // This helper is called only while TCP bytes are quarantined at a session
+  // boundary. It must claim the shared UART like every other local protocol
+  // operation; restoring the old independent ESPHome UART writer would allow
+  // an LED command to corrupt a live Zigbee2MQTT transaction.
+  if (this->role_ == "Router") {
+    ESP_LOGD(TAG, "Router firmware does not expose ZNP LED control; leaving Zigbee connection LED unchanged.");
+    return false;
+  }
+  if (!this->serial_.claim(ZigbeeSerialInterface::Owner::LOCAL)) {
+    ESP_LOGW(TAG, "Could not claim UART to turn Zigbee connection LED %s.", on ? "on" : "off");
+    return false;
+  }
+
+  const uint8_t request[2] = {0x01, static_cast<uint8_t>(on ? 0x01 : 0x00)};
+  uint8_t response[4] = {0};
+  bool status_ok = false;
+  const bool response_seen = znp_exec(
+      &this->serial_,
+      /* SREQ UTIL_LED_CONTROL */ 0x27, 0x0A,
+      /* expected SRSP */ 0x67, 0x0A,
+      [&status_ok](const uint8_t *data, uint8_t length) {
+        status_ok = length == 1 && data[0] == 0x00;
+      },
+      response, sizeof(response), this->znp_start_timeout_ms_, this->znp_byte_timeout_ms_,
+      this->znp_overall_timeout_ms_, this->znp_retries_, this->znp_post_send_delay_ms_,
+      request, sizeof(request));
+  this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
+
+  if (!response_seen) {
+    ESP_LOGW(TAG, "Zigbee connection LED %s command timed out; continuing TCP session.",
+             on ? "on" : "off");
+    return false;
+  }
+  if (!status_ok) {
+    ESP_LOGW(TAG, "Zigbee connection LED %s command returned an invalid status; continuing TCP session.",
+             on ? "on" : "off");
+    return false;
+  }
+
+  ESP_LOGD(TAG, "Zigbee connection LED turned %s.", on ? "on" : "off");
+  return true;
 }
 
 void ZigbeeGatewayComponent::on_tcp_maintenance_finished_() {

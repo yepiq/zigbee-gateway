@@ -405,17 +405,22 @@ category.
 
 ### HW-03 — Yellow Zigbee2MQTT connection LED
 
-- Status: `PLANNED`
+- Status: `NOT RUN`
 - Historical intent: UZG-01 documents the yellow/white LED as on when
   Zigbee2MQTT is connected. The original YAML exposed ZNP
   `UTIL_LED_CONTROL(LED1, OFF/ON)` frames as an internal UART switch, but no
   automation invoked it.
-- Required implementation: issue the command through the UART owner/arbitration
-  layer at a safe transaction boundary; never restore the old independent
-  `platform: uart` writer.
-- Expected after implementation: yellow LED turns on only for a confirmed
-  normal Zigbee client and turns off after its session ends; pending,
-  maintenance, and parked sockets must not falsely indicate a normal session.
+- Procedure: Observe the LED while connecting a silent provisional socket,
+  connecting and disconnecting Zigbee2MQTT, opening a pending socket, and
+  performing a maintenance takeover. Repeat once with a clean ESP32 shutdown.
+- Expected: The gateway issues XZG-compatible
+  `UTIL_LED_CONTROL(LED1, OFF/ON)` only while it locally owns the UART. The LED
+  stays off for idle, provisional, and pending-only states; turns on before a
+  confirmed normal client's buffered bytes are forwarded; and turns off after
+  that client releases the UART or during a clean shutdown. A maintenance
+  takeover does not inject LED traffic into the live normal transaction; its
+  radio reset clears the LED while the old socket is parked. Failure or an
+  unsupported Router image is logged but never prevents TCP ownership.
 
 ### HW-04 — mDNS discovery
 

@@ -125,6 +125,10 @@ void ZigbeeTcpServer::loop() {
 }
 
 void ZigbeeTcpServer::shutdown() {
+  // The socket may already have observed EOF while the state machine still
+  // owns the logical normal session. Use that authoritative state so a clean
+  // shutdown still gets one best-effort LED-off transaction.
+  const bool normal_was_active = this->state_.active() == ZigbeeTcpActiveState::NORMAL;
   this->close_client_(this->pending_, false);
   this->close_client_(this->active_, false);
   this->close_client_(this->parked_, false);
@@ -133,6 +137,8 @@ void ZigbeeTcpServer::shutdown() {
   this->state_.shutdown();
   if (this->serial_ != nullptr)
     this->serial_->set_owner(ZigbeeSerialInterface::Owner::NONE);
+  if (normal_was_active && this->parent_ != nullptr)
+    this->parent_->on_tcp_normal_session_finished_();
   this->publish_sensors_();
 }
 
@@ -286,10 +292,14 @@ void ZigbeeTcpServer::classify_active_() {
   // this the normal transparent owner.
   if (!this->state_.receive_active_payload())
     return;
-  this->serial_->set_owner(ZigbeeSerialInterface::Owner::TCP_NORMAL);
-  this->serial_->drain(ZigbeeSerialInterface::Owner::TCP_NORMAL);
+
+  // Keep the client's first bytes quarantined while the gateway performs its
+  // local LED1 transaction. Only after that transaction and its SRSP have
+  // cleared the UART may the normal client receive transparent ownership.
   if (this->parent_ != nullptr)
     this->parent_->on_tcp_normal_session_started_();
+  this->serial_->set_owner(ZigbeeSerialInterface::Owner::TCP_NORMAL);
+  this->serial_->drain(ZigbeeSerialInterface::Owner::TCP_NORMAL);
   ESP_LOGI(TCP_TAG, "Client %s is the normal UART owner", this->active_.identifier.c_str());
 }
 
@@ -504,6 +514,7 @@ void ZigbeeTcpServer::apply_maintenance_command_(MaintenanceCommand command) {
 }
 
 void ZigbeeTcpServer::handle_active_disconnect_() {
+  const bool was_normal = this->state_.active() == ZigbeeTcpActiveState::NORMAL;
   const auto result = this->state_.disconnect_active();
   const bool was_maintenance = result.action == ZigbeeTcpDisconnectAction::FINISH_MAINTENANCE;
   const std::string identifier = this->active_.identifier;
@@ -512,6 +523,9 @@ void ZigbeeTcpServer::handle_active_disconnect_() {
   this->serial_->set_owner(ZigbeeSerialInterface::Owner::NONE);
   ESP_LOGI(TCP_TAG, "%s client %s disconnected", was_maintenance ? "Maintenance" : "Normal",
            identifier.c_str());
+
+  if (was_normal && this->parent_ != nullptr)
+    this->parent_->on_tcp_normal_session_finished_();
 
   if (was_maintenance) {
     this->finish_maintenance_(result.recover_radio);

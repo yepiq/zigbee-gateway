@@ -173,7 +173,9 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void enter_bsl_for_remote_();
   void reset_for_remote_();
   void on_tcp_normal_session_started_();
+  void on_tcp_normal_session_finished_();
   void on_tcp_maintenance_finished_();
+  bool set_radio_connection_led_(bool on);
 
   void setup_metadata_cache_();
   bool refresh_metadata_();
