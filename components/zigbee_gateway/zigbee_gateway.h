@@ -11,8 +11,10 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
+#include "esphome/core/preferences.h"
 
 #include "protocol.h"
+#include "zigbee_metadata_cache.h"
 #include "zigbee_tcp_server.h"
 
 namespace esphome {
@@ -46,6 +48,9 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void set_role_text_sensor(text_sensor::TextSensor *sensor) { this->role_text_sensor_ = sensor; }
   void set_ext_pan_id_text_sensor(text_sensor::TextSensor *sensor) { this->ext_pan_id_text_sensor_ = sensor; }
   void set_hardware_text_sensor(text_sensor::TextSensor *sensor) { this->hardware_text_sensor_ = sensor; }
+  void set_metadata_status_text_sensor(text_sensor::TextSensor *sensor) {
+    this->metadata_status_text_sensor_ = sensor;
+  }
 
   void set_tcp_port(uint16_t port) {
     this->tcp_port_ = port;
@@ -89,6 +94,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void request_restart();
   void request_bsl();
   void request_router_rejoin();
+  void request_metadata_refresh();
 
  protected:
   enum class ChipFamily : uint8_t {
@@ -130,7 +136,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
     BODY,
   };
 
-  void startup_probe_();
+  bool startup_probe_();
   void enter_bsl_blocking_();
   void restart_blocking_();
   bool wait_for_reset_ind_blocking_();
@@ -139,10 +145,19 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void process_async_reset_();
   void request_bsl_();
   void request_router_rejoin_();
+  void request_metadata_refresh_();
   void enter_bsl_for_remote_();
   void reset_for_remote_();
   void on_tcp_normal_session_started_();
   void on_tcp_maintenance_finished_();
+
+  void setup_metadata_cache_();
+  bool refresh_metadata_();
+  bool mark_metadata_dirty_();
+  bool save_metadata_cache_();
+  void capture_chip_info_(const ChipInfo &chip);
+  void publish_metadata_record_(const RadioMetadataCache &cache);
+  void publish_metadata_status_(const char *status);
 
   bool detect_chip_info_(ChipInfo *chip);
   bool read_memory_word_(uint32_t address, const char *name, uint8_t out[4]);
@@ -151,7 +166,17 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void get_firmware_version_();
   void run_post_reset_diagnostics_();
   bool socket_connected_() const;
+  void publish_hardware_(const char *hardware);
+  void publish_flash_size_(uint32_t flash_size_bytes);
+  void publish_firmware_(const char *firmware);
+  void publish_stack_(const char *stack);
+  void publish_self_ieee_(const char *ieee);
   void publish_role_(const char *role);
+  void publish_pan_id_(uint16_t pan_id);
+  void publish_channel_(uint8_t channel);
+  void publish_on_network_(bool on_network);
+  void publish_parent_ieee_(const char *ieee);
+  void publish_extended_pan_id_(const char *extended_pan_id);
 
 #ifdef USE_UART_DEBUGGER
   void sniff_byte_(uart::UARTDirection direction, uint8_t byte);
@@ -180,6 +205,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *role_text_sensor_{nullptr};
   text_sensor::TextSensor *ext_pan_id_text_sensor_{nullptr};
   text_sensor::TextSensor *hardware_text_sensor_{nullptr};
+  text_sensor::TextSensor *metadata_status_text_sensor_{nullptr};
 
   uint16_t tcp_port_{6638};
   uint32_t pending_socket_timeout_ms_{30000};
@@ -210,6 +236,12 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   uint8_t reset_parser_cmd1_{0};
   uint16_t reset_parser_remaining_{0};
   bool web_handlers_registered_{false};
+  bool metadata_cache_available_{false};
+  bool metadata_capture_active_{false};
+
+  ESPPreferenceObject metadata_preference_{};
+  RadioMetadataCache metadata_cache_{};
+  RadioMetadataCache metadata_candidate_{};
 
   ZigbeeSerialInterface serial_{};
   ZigbeeTcpServer tcp_server_{};
@@ -233,6 +265,11 @@ class RadioBslButton : public button::Button, public Parented<ZigbeeGatewayCompo
 class RouterRejoinButton : public button::Button, public Parented<ZigbeeGatewayComponent> {
  protected:
   void press_action() override { this->parent_->request_router_rejoin(); }
+};
+
+class RadioMetadataRefreshButton : public button::Button, public Parented<ZigbeeGatewayComponent> {
+ protected:
+  void press_action() override { this->parent_->request_metadata_refresh(); }
 };
 
 }  // namespace zigbee_gateway

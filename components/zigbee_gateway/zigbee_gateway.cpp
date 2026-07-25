@@ -1,7 +1,9 @@
 #include "zigbee_gateway.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <utility>
 
@@ -68,10 +70,10 @@ void ZigbeeGatewayComponent::setup() {
       [this](uart::UARTDirection direction, uint8_t byte) { this->sniff_byte_(direction, byte); });
 #endif
 
-  // Preserve the working configuration's priority-600 startup behavior:
-  // identify the chip and inspect NV before this component starts accepting
-  // TCP clients, then return the radio to its normal firmware.
-  this->startup_probe_();
+  // Restore a clean, previously verified snapshot without touching the radio.
+  // First boot, an incompatible record, or a dirty record left by flashing
+  // takes the slower local BSL/NV/ZNP identification path before TCP starts.
+  this->setup_metadata_cache_();
   this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
 }
 
@@ -103,15 +105,271 @@ bool ZigbeeGatewayComponent::socket_connected_() const {
   return this->tcp_server_.has_any_client();
 }
 
+void ZigbeeGatewayComponent::publish_hardware_(const char *hardware) {
+  if (this->hardware_text_sensor_ != nullptr)
+    this->hardware_text_sensor_->publish_state(hardware);
+  if (!this->metadata_capture_active_)
+    return;
+  if (copy_radio_metadata_text(this->metadata_candidate_.hardware, hardware))
+    this->metadata_candidate_.known |= RADIO_METADATA_HARDWARE;
+  else
+    this->metadata_candidate_.known &= ~RADIO_METADATA_HARDWARE;
+}
+
+void ZigbeeGatewayComponent::publish_flash_size_(uint32_t flash_size_bytes) {
+  if (this->flash_size_sensor_ != nullptr)
+    this->flash_size_sensor_->publish_state(static_cast<float>(flash_size_bytes));
+  if (this->metadata_capture_active_) {
+    this->metadata_candidate_.flash_size_bytes = flash_size_bytes;
+    this->metadata_candidate_.known |= RADIO_METADATA_FLASH_SIZE;
+  }
+}
+
+void ZigbeeGatewayComponent::publish_firmware_(const char *firmware) {
+  if (this->firmware_text_sensor_ != nullptr)
+    this->firmware_text_sensor_->publish_state(firmware);
+  if (!this->metadata_capture_active_)
+    return;
+  if (std::strcmp(firmware, "Unknown") != 0 &&
+      copy_radio_metadata_text(this->metadata_candidate_.firmware, firmware))
+    this->metadata_candidate_.known |= RADIO_METADATA_FIRMWARE;
+  else
+    this->metadata_candidate_.known &= ~RADIO_METADATA_FIRMWARE;
+}
+
+void ZigbeeGatewayComponent::publish_stack_(const char *stack) {
+  if (this->stack_text_sensor_ != nullptr)
+    this->stack_text_sensor_->publish_state(stack);
+  if (!this->metadata_capture_active_)
+    return;
+  if (std::strcmp(stack, "Unknown") != 0 &&
+      copy_radio_metadata_text(this->metadata_candidate_.stack, stack))
+    this->metadata_candidate_.known |= RADIO_METADATA_STACK;
+  else
+    this->metadata_candidate_.known &= ~RADIO_METADATA_STACK;
+}
+
+void ZigbeeGatewayComponent::publish_self_ieee_(const char *ieee) {
+  if (this->self_ieee_text_sensor_ != nullptr)
+    this->self_ieee_text_sensor_->publish_state(ieee);
+  if (!this->metadata_capture_active_)
+    return;
+  if (std::strcmp(ieee, "Unknown") != 0 &&
+      copy_radio_metadata_text(this->metadata_candidate_.self_ieee, ieee))
+    this->metadata_candidate_.known |= RADIO_METADATA_SELF_IEEE;
+  else
+    this->metadata_candidate_.known &= ~RADIO_METADATA_SELF_IEEE;
+}
+
 void ZigbeeGatewayComponent::publish_role_(const char *role) {
   this->role_ = role;
   if (this->role_text_sensor_ != nullptr)
     this->role_text_sensor_->publish_state(role);
+  if (!this->metadata_capture_active_)
+    return;
+  if (std::strcmp(role, "Unknown") != 0 &&
+      copy_radio_metadata_text(this->metadata_candidate_.role, role))
+    this->metadata_candidate_.known |= RADIO_METADATA_ROLE;
+  else
+    this->metadata_candidate_.known &= ~RADIO_METADATA_ROLE;
 }
 
-void ZigbeeGatewayComponent::startup_probe_() {
+void ZigbeeGatewayComponent::publish_pan_id_(uint16_t pan_id) {
+  if (this->pan_id_sensor_ != nullptr)
+    this->pan_id_sensor_->publish_state(static_cast<float>(pan_id));
+  if (this->metadata_capture_active_) {
+    this->metadata_candidate_.pan_id = pan_id;
+    this->metadata_candidate_.known |= RADIO_METADATA_PAN_ID;
+  }
+}
+
+void ZigbeeGatewayComponent::publish_channel_(uint8_t channel) {
+  if (this->channel_sensor_ != nullptr)
+    this->channel_sensor_->publish_state(static_cast<float>(channel));
+  if (this->metadata_capture_active_) {
+    this->metadata_candidate_.channel = channel;
+    this->metadata_candidate_.known |= RADIO_METADATA_CHANNEL;
+  }
+}
+
+void ZigbeeGatewayComponent::publish_on_network_(bool on_network) {
+  if (this->on_network_binary_sensor_ != nullptr)
+    this->on_network_binary_sensor_->publish_state(on_network);
+  if (this->metadata_capture_active_) {
+    this->metadata_candidate_.on_network = on_network;
+    this->metadata_candidate_.known |= RADIO_METADATA_ON_NETWORK;
+  }
+}
+
+void ZigbeeGatewayComponent::publish_parent_ieee_(const char *ieee) {
+  if (this->parent_ieee_text_sensor_ != nullptr)
+    this->parent_ieee_text_sensor_->publish_state(ieee);
+  if (!this->metadata_capture_active_)
+    return;
+  if (std::strcmp(ieee, "Unknown") != 0 &&
+      copy_radio_metadata_text(this->metadata_candidate_.parent_ieee, ieee))
+    this->metadata_candidate_.known |= RADIO_METADATA_PARENT_IEEE;
+  else
+    this->metadata_candidate_.known &= ~RADIO_METADATA_PARENT_IEEE;
+}
+
+void ZigbeeGatewayComponent::publish_extended_pan_id_(const char *extended_pan_id) {
+  if (this->ext_pan_id_text_sensor_ != nullptr)
+    this->ext_pan_id_text_sensor_->publish_state(extended_pan_id);
+  if (!this->metadata_capture_active_)
+    return;
+  if (std::strcmp(extended_pan_id, "Unknown") != 0 &&
+      copy_radio_metadata_text(this->metadata_candidate_.extended_pan_id, extended_pan_id))
+    this->metadata_candidate_.known |= RADIO_METADATA_EXTENDED_PAN_ID;
+  else
+    this->metadata_candidate_.known &= ~RADIO_METADATA_EXTENDED_PAN_ID;
+}
+
+void ZigbeeGatewayComponent::publish_metadata_status_(const char *status) {
+  if (this->metadata_status_text_sensor_ != nullptr)
+    this->metadata_status_text_sensor_->publish_state(status);
+}
+
+void ZigbeeGatewayComponent::publish_metadata_record_(const RadioMetadataCache &cache) {
+  this->publish_hardware_((cache.known & RADIO_METADATA_HARDWARE) != 0 ? cache.hardware : "Unknown");
+  if (this->flash_size_sensor_ != nullptr) {
+    this->flash_size_sensor_->publish_state(
+        (cache.known & RADIO_METADATA_FLASH_SIZE) != 0 ? static_cast<float>(cache.flash_size_bytes) : NAN);
+  }
+  this->publish_firmware_((cache.known & RADIO_METADATA_FIRMWARE) != 0 ? cache.firmware : "Unknown");
+  this->publish_stack_((cache.known & RADIO_METADATA_STACK) != 0 ? cache.stack : "Unknown");
+  this->publish_self_ieee_((cache.known & RADIO_METADATA_SELF_IEEE) != 0 ? cache.self_ieee : "Unknown");
+  this->publish_role_((cache.known & RADIO_METADATA_ROLE) != 0 ? cache.role : "Unknown");
+  if (this->pan_id_sensor_ != nullptr) {
+    this->pan_id_sensor_->publish_state(
+        (cache.known & RADIO_METADATA_PAN_ID) != 0 ? static_cast<float>(cache.pan_id) : NAN);
+  }
+  if (this->channel_sensor_ != nullptr) {
+    this->channel_sensor_->publish_state(
+        (cache.known & RADIO_METADATA_CHANNEL) != 0 ? static_cast<float>(cache.channel) : NAN);
+  }
+  if (this->on_network_binary_sensor_ != nullptr) {
+    if ((cache.known & RADIO_METADATA_ON_NETWORK) != 0)
+      this->on_network_binary_sensor_->publish_state(cache.on_network != 0);
+    else
+      this->on_network_binary_sensor_->invalidate_state();
+  }
+  this->publish_parent_ieee_(
+      (cache.known & RADIO_METADATA_PARENT_IEEE) != 0 ? cache.parent_ieee : "Unknown");
+  this->publish_extended_pan_id_(
+      (cache.known & RADIO_METADATA_EXTENDED_PAN_ID) != 0 ? cache.extended_pan_id : "Unknown");
+}
+
+bool ZigbeeGatewayComponent::save_metadata_cache_() {
+  if (!this->metadata_preference_.save(&this->metadata_cache_)) {
+    ESP_LOGE(TAG, "Failed to queue Zigbee metadata preference.");
+    return false;
+  }
+  if (global_preferences == nullptr || !global_preferences->sync()) {
+    ESP_LOGE(TAG, "Failed to commit Zigbee metadata preference.");
+    return false;
+  }
+  return true;
+}
+
+bool ZigbeeGatewayComponent::mark_metadata_dirty_() {
+  if (!this->metadata_cache_available_) {
+    initialize_radio_metadata_cache(&this->metadata_cache_);
+    this->metadata_cache_available_ = true;
+  }
+  this->metadata_cache_.dirty = 1;
+  const bool saved = this->save_metadata_cache_();
+  this->publish_metadata_status_(this->metadata_cache_.known != 0 ? "Stale" : "Unavailable");
+  if (!saved)
+    ESP_LOGE(TAG, "Could not persist the pre-BSL dirty marker; cached metadata is unsafe after reboot.");
+  return saved;
+}
+
+void ZigbeeGatewayComponent::capture_chip_info_(const ChipInfo &chip) {
+  if (!this->metadata_capture_active_)
+    return;
+  this->metadata_candidate_.chip_family = static_cast<uint8_t>(chip.family);
+  this->metadata_candidate_.chip_id_be = chip.chip_id_be;
+  this->metadata_candidate_.chip_id_16 = chip.chip_id_16;
+  this->metadata_candidate_.wafer_id = chip.wafer_id;
+  this->metadata_candidate_.pg_rev = chip.pg_rev;
+  this->metadata_candidate_.protocols = chip.protocols;
+  this->metadata_candidate_.flash_pages = chip.flash_pages;
+  this->metadata_candidate_.mode_cfg = chip.mode_cfg;
+  this->metadata_candidate_.bsl_cfg = chip.bsl_cfg;
+}
+
+void ZigbeeGatewayComponent::setup_metadata_cache_() {
+  this->metadata_preference_ = global_preferences->make_preference<RadioMetadataCache>(
+      fnv1_hash("zigbee_gateway.radio_metadata"), true);
+
+  RadioMetadataCache loaded{};
+  if (this->metadata_preference_.load(&loaded) && valid_radio_metadata_cache(loaded)) {
+    this->metadata_cache_ = loaded;
+    this->metadata_cache_available_ = true;
+    this->publish_metadata_record_(this->metadata_cache_);
+    if (this->metadata_cache_.dirty == 0) {
+      ESP_LOGI(TAG, "Restored Zigbee metadata cache generation %u; startup radio probe skipped.",
+               (unsigned) this->metadata_cache_.generation);
+      this->publish_metadata_status_("Restored");
+      return;
+    }
+    ESP_LOGW(TAG, "Zigbee metadata cache generation %u is dirty; refreshing before TCP startup.",
+             (unsigned) this->metadata_cache_.generation);
+    this->publish_metadata_status_("Stale");
+  } else {
+    initialize_radio_metadata_cache(&this->metadata_cache_);
+    this->metadata_cache_available_ = false;
+    this->publish_metadata_record_(this->metadata_cache_);
+    this->publish_metadata_status_("Unavailable");
+    ESP_LOGI(TAG, "No compatible Zigbee metadata cache; running initial identification.");
+  }
+
+  this->refresh_metadata_();
+}
+
+bool ZigbeeGatewayComponent::refresh_metadata_() {
+  if (this->socket_connected_()) {
+    ESP_LOGW(TAG, "TCP client connected; metadata refresh skipped to preserve UART ownership.");
+    return false;
+  }
+
+  this->mark_metadata_dirty_();
+  const uint32_t next_generation = this->metadata_cache_.generation + 1;
+  initialize_radio_metadata_cache(&this->metadata_candidate_, next_generation);
+  this->metadata_candidate_.dirty = 1;
+  this->metadata_capture_active_ = true;
+  this->role_ = "Unknown";
+  this->publish_metadata_status_("Refreshing");
+
+  const bool identified = this->startup_probe_();
+  this->metadata_capture_active_ = false;
+
+  if (!identified) {
+    ESP_LOGW(TAG, "Zigbee metadata refresh failed; retaining the last known snapshot as stale.");
+    this->publish_metadata_record_(this->metadata_cache_);
+    this->publish_metadata_status_(this->metadata_cache_.known != 0 ? "Stale" : "Unavailable");
+    return false;
+  }
+
+  this->metadata_candidate_.dirty = 0;
+  this->metadata_cache_ = this->metadata_candidate_;
+  this->metadata_cache_available_ = true;
+  this->publish_metadata_record_(this->metadata_cache_);
+  if (this->save_metadata_cache_()) {
+    ESP_LOGI(TAG, "Saved verified Zigbee metadata cache generation %u.",
+             (unsigned) this->metadata_cache_.generation);
+  } else {
+    ESP_LOGE(TAG, "Radio metadata is verified for this boot but could not be saved.");
+  }
+  this->publish_metadata_status_("Verified");
+  return true;
+}
+
+bool ZigbeeGatewayComponent::startup_probe_() {
   ESP_LOGI(TAG, "Get Zigbee Chip Info");
 
+  bool identified = false;
   if (this->socket_connected_()) {
     ESP_LOGW(TAG, "Socket client connected; skipping BSL chip probe to avoid UART contention.");
   } else {
@@ -120,12 +378,15 @@ void ZigbeeGatewayComponent::startup_probe_() {
       ESP_LOGW(TAG, "Failed to SYNC with BSL");
     } else {
       ChipInfo chip;
-      if (this->detect_chip_info_(&chip))
+      if (this->detect_chip_info_(&chip)) {
+        identified = true;
         this->scan_nv_(chip.family);
+      }
     }
   }
 
   this->restart_blocking_();
+  return identified;
 }
 
 void ZigbeeGatewayComponent::enter_bsl_blocking_() {
@@ -211,6 +472,10 @@ void ZigbeeGatewayComponent::request_bsl() {
 
 void ZigbeeGatewayComponent::request_router_rejoin() {
   this->defer("zigbee_router_rejoin", [this]() { this->request_router_rejoin_(); });
+}
+
+void ZigbeeGatewayComponent::request_metadata_refresh() {
+  this->defer("zigbee_metadata_refresh", [this]() { this->request_metadata_refresh_(); });
 }
 
 void ZigbeeGatewayComponent::request_restart_() {
@@ -317,6 +582,7 @@ void ZigbeeGatewayComponent::request_bsl_() {
   ESP_LOGI(TAG, "Put Zigbee in BSL mode.");
   this->operation_active_ = true;
   this->sniffer_enabled_ = false;
+  this->mark_metadata_dirty_();
   this->bsl_pin_->digital_write(true);
   this->reset_pin_->digital_write(true);
 
@@ -363,10 +629,31 @@ void ZigbeeGatewayComponent::request_router_rejoin_() {
   });
 }
 
+void ZigbeeGatewayComponent::request_metadata_refresh_() {
+  if (this->operation_active_) {
+    ESP_LOGW(TAG, "Another Zigbee operation is active; metadata refresh request ignored.");
+    return;
+  }
+  if (this->tcp_server_.has_any_client()) {
+    ESP_LOGW(TAG, "TCP client connected; stop it before manually refreshing Zigbee information.");
+    return;
+  }
+  if (!this->serial_.claim(ZigbeeSerialInterface::Owner::LOCAL)) {
+    ESP_LOGW(TAG, "UART is owned by another operation; metadata refresh request ignored.");
+    return;
+  }
+
+  this->operation_active_ = true;
+  this->refresh_metadata_();
+  this->operation_active_ = false;
+  this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
+}
+
 void ZigbeeGatewayComponent::enter_bsl_for_remote_() {
   // The TCP server has already selected the exclusive maintenance owner and
   // quarantined any normal client. Keep the raw stream opaque: only manipulate
   // the radio pins here; the external tool owns every following BSL byte.
+  this->mark_metadata_dirty_();
   this->enter_bsl_blocking_();
 }
 
@@ -386,11 +673,25 @@ void ZigbeeGatewayComponent::on_tcp_normal_session_started_() {
 
 void ZigbeeGatewayComponent::on_tcp_maintenance_finished_() {
   // Transparent BSL access can replace coordinator firmware with router
-  // firmware (or vice versa) without the ESP32 observing the image. Invalidate
-  // the cached role until a later explicit diagnostic pass establishes it.
-  this->publish_role_("Unknown");
+  // firmware (or vice versa) without the ESP32 observing the image. A BSL
+  // session dirtied the snapshot before pin takeover; identify the resulting
+  // image locally before admitting the next normal TCP owner.
   this->sniffer_enabled_ = true;
-  ESP_LOGI(TAG, "Maintenance transport ended; awaiting a clean client restart.");
+  if (!this->metadata_cache_available_ || this->metadata_cache_.dirty == 0) {
+    ESP_LOGI(TAG, "Maintenance transport ended without a BSL metadata change.");
+    return;
+  }
+  if (!this->serial_.claim(ZigbeeSerialInterface::Owner::LOCAL)) {
+    ESP_LOGE(TAG, "Could not claim UART for post-maintenance metadata refresh.");
+    this->publish_metadata_status_("Stale");
+    return;
+  }
+
+  ESP_LOGI(TAG, "Maintenance transport ended; identifying the resulting Zigbee firmware.");
+  this->operation_active_ = true;
+  this->refresh_metadata_();
+  this->operation_active_ = false;
+  this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
 }
 
 void ZigbeeGatewayComponent::get_device_info_() {
@@ -414,8 +715,7 @@ void ZigbeeGatewayComponent::get_device_info_() {
         char ieee[24];
         snprintf(ieee, sizeof(ieee), "%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X", data[8], data[7], data[6],
                  data[5], data[4], data[3], data[2], data[1]);
-        if (this->self_ieee_text_sensor_ != nullptr)
-          this->self_ieee_text_sensor_->publish_state(ieee);
+        this->publish_self_ieee_(ieee);
 
         const char *role = "Unknown";
         switch (data[0]) {
@@ -464,12 +764,11 @@ void ZigbeeGatewayComponent::get_firmware_version_() {
         const uint32_t build = static_cast<uint32_t>(data[5]) | (static_cast<uint32_t>(data[6]) << 8) |
                                (static_cast<uint32_t>(data[7]) << 16) |
                                (static_cast<uint32_t>(data[8]) << 24);
-        if (this->firmware_text_sensor_ != nullptr)
-          this->firmware_text_sensor_->publish_state(std::to_string(build));
+        const std::string firmware = std::to_string(build);
+        this->publish_firmware_(firmware.c_str());
         char stack[16];
         snprintf(stack, sizeof(stack), "%u.%u.%u", major, minor, maintenance);
-        if (this->stack_text_sensor_ != nullptr)
-          this->stack_text_sensor_->publish_state(stack);
+        this->publish_stack_(stack);
         ESP_LOGI(TAG, "SYS_VERSION -> build=%u, stack=%s", (unsigned) build, stack);
       },
       buffer, sizeof(buffer), this->znp_start_timeout_ms_, this->znp_byte_timeout_ms_,
@@ -477,10 +776,8 @@ void ZigbeeGatewayComponent::get_firmware_version_() {
 
   if (!ok) {
     ESP_LOGW(TAG, "SYS_VERSION timed out.");
-    if (this->firmware_text_sensor_ != nullptr)
-      this->firmware_text_sensor_->publish_state("Unknown");
-    if (this->stack_text_sensor_ != nullptr)
-      this->stack_text_sensor_->publish_state("Unknown");
+    this->publish_firmware_("Unknown");
+    this->publish_stack_("Unknown");
   }
 }
 
@@ -637,8 +934,7 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
     chip->hardware = description;
   }
   ESP_LOGI(TAG, "Hardware: %s (mode byte=0x%02X)", chip->hardware.c_str(), mode_byte);
-  if (this->hardware_text_sensor_ != nullptr)
-    this->hardware_text_sensor_->publish_state(chip->hardware);
+  this->publish_hardware_(chip->hardware.c_str());
 
   // x2x7 devices use 8 KiB flash pages; x2 devices use 4 KiB pages. Preserve
   // the working baseline's 4 KiB fallback for UNKNOWN, but make it visible.
@@ -649,8 +945,7 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
   ESP_LOGI(TAG, "FLASH pages=%u page_size=%u -> flash_size=%u bytes (~%u KiB)",
            (unsigned) chip->flash_pages, (unsigned) page_size, (unsigned) chip->flash_size_bytes,
            (unsigned) (chip->flash_size_bytes / 1024));
-  if (this->flash_size_sensor_ != nullptr)
-    this->flash_size_sensor_->publish_state(static_cast<float>(chip->flash_size_bytes));
+  this->publish_flash_size_(chip->flash_size_bytes);
 
   // CCTools derives MODE_CFG and BSL_CFG from the final 88-byte CCFG area:
   //   MODE_CFG = flash_end - 88 + 0x0C
@@ -680,8 +975,7 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
                  ieee_msw[2], ieee_msw[1], ieee_msw[0], ieee_lsw[3], ieee_lsw[2], ieee_lsw[1],
                  ieee_lsw[0]);
         ESP_LOGI(TAG, "IEEE (BSL): %s", ieee);
-        if (this->self_ieee_text_sensor_ != nullptr)
-          this->self_ieee_text_sensor_->publish_state(ieee);
+        this->publish_self_ieee_(ieee);
       } else {
         ESP_LOGW(TAG, "IEEE primary-address read failed.");
       }
@@ -690,6 +984,7 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
     }
   }
 
+  this->capture_chip_info_(*chip);
   return true;
 }
 
@@ -761,8 +1056,7 @@ void ZigbeeGatewayComponent::scan_nv_(ChipFamily family) {
     }
     const bool on_network = payload[0] != 0;
     ESP_LOGI(TAG, "ZCD_NV_BDBNODEISONANETWORK: on_network=%s", YESNO(on_network));
-    if (this->on_network_binary_sensor_ != nullptr)
-      this->on_network_binary_sensor_->publish_state(on_network);
+    this->publish_on_network_(on_network);
   };
 
   const auto handle_nib = [this](const uint8_t *payload, uint16_t used) {
@@ -824,15 +1118,13 @@ void ZigbeeGatewayComponent::scan_nv_(ChipFamily family) {
                (unsigned) network_state);
       ESP_LOGI(TAG, "ZCD_NV_NIB: MaxChildren=%u MaxRouters=%u MaxDepth=%u",
                (unsigned) max_children, (unsigned) max_routers, (unsigned) max_depth);
-      if (this->channel_sensor_ != nullptr)
-        this->channel_sensor_->publish_state(static_cast<float>(channel));
+      this->publish_channel_(channel);
     }
 
     if (used >= 0x26) {
       const uint16_t pan_id = payload[0x24] | (static_cast<uint16_t>(payload[0x25]) << 8);
       ESP_LOGI(TAG, "ZCD_NV_NIB: nwkPanId=0x%04X (%u)", (unsigned) pan_id, (unsigned) pan_id);
-      if (this->pan_id_sensor_ != nullptr)
-        this->pan_id_sensor_->publish_state(static_cast<float>(pan_id));
+      this->publish_pan_id_(pan_id);
     }
 
     if (used >= 0x39 + 8) {
@@ -842,8 +1134,7 @@ void ZigbeeGatewayComponent::scan_nv_(ChipFamily family) {
                coordinator[7], coordinator[6], coordinator[5], coordinator[4], coordinator[3], coordinator[2],
                coordinator[1], coordinator[0]);
       ESP_LOGI(TAG, "ZCD_NV_NIB: nwkCoordExtAddress=%s", coordinator_string);
-      if (this->parent_ieee_text_sensor_ != nullptr)
-        this->parent_ieee_text_sensor_->publish_state(coordinator_string);
+      this->publish_parent_ieee_(coordinator_string);
 
       const uint8_t *extended_pan = &payload[0x39];
       ESP_LOGI(TAG, "ZCD_NV_NIB: extendedPANID(msb)=%02X %02X %02X %02X %02X %02X %02X %02X",
@@ -863,8 +1154,7 @@ void ZigbeeGatewayComponent::scan_nv_(ChipFamily family) {
           break;
         position += static_cast<size_t>(written);
       }
-      if (this->ext_pan_id_text_sensor_ != nullptr)
-        this->ext_pan_id_text_sensor_->publish_state(extended_pan_decimal);
+      this->publish_extended_pan_id_(extended_pan_decimal);
     }
   };
 

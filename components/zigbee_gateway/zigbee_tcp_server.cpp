@@ -103,7 +103,10 @@ void ZigbeeTcpServer::loop() {
   }
   if (this->bsl_armed_ && now - this->bsl_armed_at_ >= this->pending_timeout_ms_) {
     ESP_LOGW(TCP_TAG, "BSL rendezvous timed out after %u ms", static_cast<unsigned>(this->pending_timeout_ms_));
+    const bool radio_was_in_bsl = this->bsl_entered_;
     this->clear_bsl_arm_(true);
+    if (radio_was_in_bsl && this->parent_ != nullptr)
+      this->parent_->on_tcp_maintenance_finished_();
   }
   if (this->parked_.connected() && now - this->parked_at_ >= this->park_timeout_ms_) {
     ESP_LOGW(TCP_TAG, "Parked client %s reached the %u ms safety limit; closing it",

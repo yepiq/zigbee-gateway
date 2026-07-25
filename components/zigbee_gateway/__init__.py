@@ -41,10 +41,12 @@ CONF_PARENT_IEEE = "parent_ieee"
 CONF_ROLE = "role"
 CONF_EXTENDED_PAN_ID = "extended_pan_id"
 CONF_HARDWARE = "hardware"
+CONF_METADATA_STATUS = "metadata_status"
 
 CONF_RESTART = "restart"
 CONF_ENTER_BSL = "enter_bsl"
 CONF_ROUTER_REJOIN = "router_rejoin"
+CONF_REFRESH_METADATA = "refresh_metadata"
 
 CONF_RESET_TIMEOUT = "reset_timeout"
 CONF_ZNP_START_TIMEOUT = "znp_start_timeout"
@@ -74,6 +76,11 @@ RadioBslButton = zigbee_gateway_ns.class_(
 )
 RouterRejoinButton = zigbee_gateway_ns.class_(
     "RouterRejoinButton", button.Button, cg.Parented.template(ZigbeeGatewayComponent)
+)
+RadioMetadataRefreshButton = zigbee_gateway_ns.class_(
+    "RadioMetadataRefreshButton",
+    button.Button,
+    cg.Parented.template(ZigbeeGatewayComponent),
 )
 
 CONFIG_SCHEMA = cv.All(
@@ -144,6 +151,10 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_HARDWARE): text_sensor.text_sensor_schema(
                 icon="mdi:chip",
             ),
+            cv.Required(CONF_METADATA_STATUS): text_sensor.text_sensor_schema(
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:database-check",
+            ),
             cv.Optional(CONF_RESTART): button.button_schema(
                 RadioRestartButton,
                 device_class=DEVICE_CLASS_RESTART,
@@ -159,6 +170,11 @@ CONFIG_SCHEMA = cv.All(
                 RouterRejoinButton,
                 entity_category=ENTITY_CATEGORY_CONFIG,
                 icon="mdi:access-point-plus",
+            ),
+            cv.Optional(CONF_REFRESH_METADATA): button.button_schema(
+                RadioMetadataRefreshButton,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:refresh",
             ),
             cv.Optional(CONF_RESET_TIMEOUT, default="5s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_ZNP_START_TIMEOUT, default="100ms"): cv.positive_time_period_milliseconds,
@@ -225,12 +241,18 @@ async def to_code(config):
         CONF_ROLE: "set_role_text_sensor",
         CONF_EXTENDED_PAN_ID: "set_ext_pan_id_text_sensor",
         CONF_HARDWARE: "set_hardware_text_sensor",
+        CONF_METADATA_STATUS: "set_metadata_status_text_sensor",
     }
     for key, setter in text_sensor_setters.items():
         sens = await text_sensor.new_text_sensor(config[key])
         cg.add(getattr(var, setter)(sens))
 
-    for key in (CONF_RESTART, CONF_ENTER_BSL, CONF_ROUTER_REJOIN):
+    for key in (
+        CONF_RESTART,
+        CONF_ENTER_BSL,
+        CONF_ROUTER_REJOIN,
+        CONF_REFRESH_METADATA,
+    ):
         if key not in config:
             continue
         btn = await button.new_button(config[key])

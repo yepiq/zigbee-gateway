@@ -69,7 +69,7 @@ esphome:
   name_add_mac_suffix: false
   project:
     name: yepiq.Zigbee_Gateway
-    version: '1.92b'
+    version: '1.93b'
 
 esp32:
   board: esp32dev
@@ -155,6 +155,8 @@ zigbee_gateway:
     name: Zigbee BSL Mode
   router_rejoin:
     name: Zigbee Router Rejoin
+  refresh_metadata:
+    name: Refresh Zigbee Information
 
   flash_size:
     name: Zigbee Flash Size
@@ -180,6 +182,8 @@ zigbee_gateway:
     name: Zigbee Extended PAN ID
   hardware:
     name: Zigbee Hardware
+  metadata_status:
+    name: Zigbee Metadata Status
 
 ### CONTROL SETTINGS
 

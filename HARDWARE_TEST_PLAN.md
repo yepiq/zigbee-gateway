@@ -42,16 +42,19 @@ maintenance window and a recovery method.
 - Status: `NOT RUN`
 - Procedure: Power-cycle the UZG-01 with Ethernet connected.
 - Expected: ESP32 boots without a watchdog reset, Ethernet obtains an address,
-  the web server and native API become reachable, and TCP port 6638 starts
-  listening only after the startup radio probe finishes.
+  the last verified Zigbee information is restored without entering BSL, the
+  web server and native API become reachable, and TCP port 6638 starts
+  listening without waiting for an intrusive startup radio probe.
 
-### BAS-02 — Startup radio identification
+### BAS-02 — Initial or invalid-cache radio identification
 
 - Status: `NOT RUN`
-- Procedure: Capture complete logs from power-on through TCP-listener startup.
+- Procedure: On a device without a compatible metadata record, capture complete
+  logs from power-on through TCP-listener startup.
 - Expected: BSL chip identification, flash-size detection, NVOCMP inspection,
   hardware identity, radio reset, and applicable ZNP firmware diagnostics
-  complete without concurrent TCP UART access.
+  complete without concurrent TCP UART access. A verified record is committed
+  before TCP starts.
 
 ### BAS-03 — Diagnostic entity consistency
 
@@ -60,15 +63,92 @@ maintenance window and a recovery method.
   network state, PAN ID, channel, parent IEEE, and extended PAN ID with the
   radio firmware and Zigbee2MQTT information.
 - Expected: Supported values agree; unavailable or inapplicable values are
-  reported as unknown rather than fabricated.
+  reported as unknown rather than fabricated. Zigbee Metadata Status accurately
+  reports `Restored`, `Refreshing`, `Verified`, `Stale`, or `Unavailable`.
 
 ### BAS-04 — ESP32 OTA update
 
 - Status: `NOT RUN`
 - Procedure: Perform an ESPHome OTA update with Zigbee2MQTT stopped, then repeat
   with it running after the ordinary TCP path has passed.
-- Expected: ESP32 returns cleanly, startup diagnostics complete, and
-  Zigbee2MQTT reconnects without radio network loss.
+- Expected: ESP32 returns cleanly, cached Zigbee information restores without
+  toggling the radio pins, and Zigbee2MQTT reconnects without radio network
+  loss.
+
+## Persistent radio metadata
+
+### CACHE-01 — First identification creates a clean snapshot
+
+- Status: `NOT RUN`
+- Procedure: Start with no compatible Zigbee metadata preference, boot once,
+  and retain the full log through listener startup.
+- Expected: Status progresses from `Unavailable` through `Refreshing` to
+  `Verified`; one complete local identification runs; the log reports a saved
+  generation; all available entities contain the identified values.
+
+### CACHE-02 — Clean reboot uses the fast restore path
+
+- Status: `NOT RUN`
+- Procedure: After CACHE-01, power-cycle the ESP32 and capture the boot log and
+  radio reset/BSL pins if test equipment is available.
+- Expected: Status becomes `Restored`; the saved values publish immediately;
+  logs explicitly say the startup probe was skipped; neither reset nor BSL is
+  driven for identification.
+
+### CACHE-03 — Manual refresh while idle
+
+- Status: `NOT RUN`
+- Procedure: Stop Zigbee2MQTT and press the Refresh Zigbee Information
+  diagnostic button.
+- Expected: The component exclusively claims UART, marks the record dirty,
+  identifies BSL/NV/ZNP information, resets the radio, saves the next clean
+  generation, reports `Verified`, and releases UART for the next TCP client.
+
+### CACHE-04 — BSL maintenance refreshes before normal reconnect
+
+- Status: `NOT RUN`
+- Procedure: Perform any successful remote BSL session, note metadata status
+  and logs, close the maintenance connection, and let Zigbee2MQTT reconnect.
+- Expected: The record is committed dirty immediately before BSL pin entry;
+  old values remain visible as stale during maintenance; after the maintenance
+  socket closes, local identification saves the new clean snapshot before the
+  returning normal TCP client obtains UART.
+
+### CACHE-05 — Interrupted maintenance survives an ESP32 reboot
+
+- Status: `NOT RUN`
+- Procedure: Enter BSL through the TCP maintenance workflow without erasing or
+  writing the radio, then power-cycle the whole gateway before completing the
+  session.
+- Expected: The persisted dirty marker prevents a fast restore; boot performs a
+  full identification, resets the still-valid radio firmware, saves a clean
+  snapshot, and only then starts normal TCP service.
+
+### CACHE-06 — Failed refresh retains last-known values
+
+- Status: `NOT RUN`
+- Procedure: With a known clean record and Zigbee2MQTT stopped, temporarily
+  force BSL synchronization to fail, then invoke Refresh Zigbee Information.
+- Expected: The clean record is first marked dirty; the failed candidate never
+  replaces it; previous values remain published; status is `Stale`; the next
+  boot retries identification.
+
+### CACHE-07 — Manual refresh cannot preempt a TCP client
+
+- Status: `NOT RUN`
+- Procedure: Keep Zigbee2MQTT connected and press Refresh Zigbee Information.
+- Expected: The request is rejected with a clear log message; status and
+  metadata do not change; no radio pin toggles and Zigbee2MQTT keeps UART.
+
+### CACHE-08 — Incompatible record is rejected
+
+- Status: `NOT RUN`
+- Host check: Run `tests/zigbee_metadata_cache_test.cpp`.
+- Hardware procedure: Install a development build with an intentionally newer
+  cache schema after first creating a clean record with the preceding schema.
+- Expected: Magic, schema, size, flags, dirty value, Boolean domain, and string
+  termination checks reject malformed records; hardware boot treats a schema
+  mismatch as unavailable and performs initial identification.
 
 ## Ordinary TCP transport
 
@@ -160,6 +240,8 @@ maintenance window and a recovery method.
   allow its version/ping check to continue on the same TCP connection.
 - Expected: The ESP32 toggles radio reset without consuming
   `SYS_RESET_IND` or other UART bytes; the tool completes its check.
+  ESPHome waits until that maintenance socket closes before taking UART for its
+  own metadata refresh.
 
 ### MNT-06 — Parked Zigbee2MQTT behavior
 
@@ -168,22 +250,25 @@ maintenance window and a recovery method.
   Zigbee2MQTT process and gateway connection counters.
 - Expected: Its socket remains open while possible, incoming requests are
   drained and discarded, and it never reaches UART. When maintenance ends, it
-  receives one abortive close and reconnects cleanly.
+  receives one abortive close; local metadata refresh completes; it then
+  reconnects cleanly.
 
 ### MNT-07 — Aborted maintenance recovery
 
 - Status: `NOT RUN`
 - Procedure: Abort the flasher after entering BSL but before its normal reset.
 - Expected: Maintenance disconnect triggers a hardware recovery reset, the
-  parked socket is closed afterward, and Zigbee2MQTT can reconnect to whatever
-  valid radio image remains.
+  parked socket is closed afterward, metadata remains dirty until local
+  identification succeeds, and Zigbee2MQTT can reconnect to whatever valid
+  radio image remains.
 
 ### MNT-08 — BSL rendezvous timeout
 
 - Status: `NOT RUN`
 - Procedure: With no active client, send `/cmdZigBSL` but do not connect a
   flashing socket for more than 30 seconds.
-- Expected: The rendezvous expires and the ESP32 resets the radio out of BSL.
+- Expected: The rendezvous expires, the ESP32 resets the radio out of BSL, and
+  the dirty metadata snapshot is locally refreshed before normal TCP resumes.
 
 ### MNT-09 — Parked-client safety limit
 
@@ -202,7 +287,7 @@ maintenance window and a recovery method.
   Zigbee2MQTT.
 - Expected: Flash and verification succeed, the existing Zigbee network is
   preserved when the image/storage format supports it, and diagnostics reflect
-  the new firmware after a fresh identification pass.
+  the new firmware after the automatic post-maintenance identification pass.
 
 ### FW-02 — Coordinator downgrade
 
@@ -218,15 +303,17 @@ maintenance window and a recovery method.
 - Procedure: In a controlled maintenance window, flash router firmware and
   commission it into another Zigbee network.
 - Expected: The gateway does not assume the transferred image type; cached role
-  becomes Unknown until identified, and router rejoin control works.
+  remains stale during transfer, is replaced only after local identification,
+  and router rejoin control works.
 
 ### FW-04 — Router-to-coordinator conversion
 
 - Status: `NOT RUN`
 - Procedure: Flash a compatible coordinator image back onto the radio.
 - Expected: The radio becomes usable by Zigbee2MQTT after appropriate
-  coordinator configuration/restore; ESPHome does not retain the old Router
-  role merely because it did not inspect the image stream.
+  coordinator configuration/restore; the automatic local identification does
+  not retain the old Router role merely because ESPHome did not inspect the
+  image stream.
 
 ## Physical controls, discovery, and LEDs
 
