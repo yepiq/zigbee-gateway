@@ -45,12 +45,14 @@ CONF_CHANNEL = "channel"
 CONF_ON_NETWORK = "on_network"
 CONF_FIRMWARE = "firmware"
 CONF_STACK = "stack"
+CONF_FACTORY_IEEE = "factory_ieee"
 CONF_SELF_IEEE = "self_ieee"
 CONF_PARENT_IEEE = "parent_ieee"
 CONF_ROLE = "role"
 CONF_EXTENDED_PAN_ID = "extended_pan_id"
 CONF_HARDWARE = "hardware"
 CONF_METADATA_STATUS = "metadata_status"
+CONF_NETWORK_INFORMATION_STATUS = "network_information_status"
 
 CONF_RESTART = "restart"
 CONF_ENTER_BSL = "enter_bsl"
@@ -185,6 +187,9 @@ CONFIG_SCHEMA = cv.All(
                 icon="mdi:source-repository",
             ),
             cv.Required(CONF_STACK): text_sensor.text_sensor_schema(icon="mdi:zigbee"),
+            cv.Required(CONF_FACTORY_IEEE): text_sensor.text_sensor_schema(
+                icon="mdi:identifier",
+            ),
             cv.Required(CONF_SELF_IEEE): text_sensor.text_sensor_schema(
                 icon="mdi:identifier",
             ),
@@ -203,6 +208,12 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_METADATA_STATUS): text_sensor.text_sensor_schema(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:database-check",
+            ),
+            cv.Required(
+                CONF_NETWORK_INFORMATION_STATUS
+            ): text_sensor.text_sensor_schema(
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+                icon="mdi:database-eye",
             ),
             cv.Optional(CONF_RESTART): button.button_schema(
                 RadioRestartButton,
@@ -293,12 +304,14 @@ async def to_code(config):
     text_sensor_setters = {
         CONF_FIRMWARE: "set_firmware_text_sensor",
         CONF_STACK: "set_stack_text_sensor",
+        CONF_FACTORY_IEEE: "set_factory_ieee_text_sensor",
         CONF_SELF_IEEE: "set_self_ieee_text_sensor",
         CONF_PARENT_IEEE: "set_parent_ieee_text_sensor",
         CONF_ROLE: "set_role_text_sensor",
         CONF_EXTENDED_PAN_ID: "set_ext_pan_id_text_sensor",
         CONF_HARDWARE: "set_hardware_text_sensor",
         CONF_METADATA_STATUS: "set_metadata_status_text_sensor",
+        CONF_NETWORK_INFORMATION_STATUS: "set_network_information_status_text_sensor",
         CONF_TRANSPORT_STATE: "set_transport_state_text_sensor",
         CONF_LAST_TRANSPORT_EVENT: "set_last_transport_event_text_sensor",
     }

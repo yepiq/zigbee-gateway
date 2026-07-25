@@ -42,9 +42,10 @@ maintenance window and a recovery method.
 - Status: `NOT RUN`
 - Procedure: Power-cycle the UZG-01 with Ethernet connected.
 - Expected: ESP32 boots without a watchdog reset, Ethernet obtains an address,
-  the last verified Zigbee information is restored without entering BSL, the
-  web server and native API become reachable, and TCP port 6638 starts
-  listening without waiting for an intrusive startup radio probe.
+  physical identity and the last observed running image are restored without
+  entering BSL, the last-known network snapshot reports `Cached`, the web
+  server and native API become reachable, and TCP port 6638 starts listening
+  without waiting for an intrusive startup radio probe.
 
 ### BAS-02 — Initial or invalid-cache radio identification
 
@@ -64,7 +65,9 @@ maintenance window and a recovery method.
   radio firmware and Zigbee2MQTT information.
 - Expected: Supported values agree; unavailable or inapplicable values are
   reported as unknown rather than fabricated. Zigbee Metadata Status accurately
-  reports `Restored`, `Refreshing`, `Verified`, `Stale`, or `Unavailable`.
+  reports `Restored`, `Refreshing`, `Verified`, `Awaiting Observation`, or
+  `Unavailable`. Zigbee Network Information Status accurately reports
+  `Cached`, `Observed`, `Refreshed`, or `Unavailable`.
 
 ### BAS-04 — ESP32 OTA update
 
@@ -146,9 +149,20 @@ maintenance window and a recovery method.
 - Host check: Run `tests/zigbee_metadata_cache_test.cpp`.
 - Hardware procedure: Install a development build with an intentionally newer
   cache schema after first creating a clean record with the preceding schema.
-- Expected: Magic, schema, size, flags, dirty value, Boolean domain, and string
-  termination checks reject malformed records; hardware boot treats a schema
-  mismatch as unavailable and performs initial identification.
+- Expected: Independent physical-identity, running-image, and network-snapshot
+  magic, schema, size, known masks, Boolean domains, and string termination
+  checks reject malformed records; hardware boot treats a schema mismatch as
+  unavailable and performs the required identification.
+
+### CACHE-09 — Persistence scopes invalidate independently
+
+- Status: `NOT RUN`
+- Procedure: Establish all three records, enter BSL without writing firmware,
+  then reboot before completing maintenance.
+- Expected: Physical hardware, flash capacity, and factory IEEE remain
+  available and unchanged. Only the running-image record reports
+  `Awaiting Observation`; the previous network values remain visible with
+  Network Information Status `Cached`.
 
 ## Host transport state tests
 

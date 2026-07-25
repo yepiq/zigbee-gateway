@@ -67,6 +67,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   }
   void set_firmware_text_sensor(text_sensor::TextSensor *sensor) { this->firmware_text_sensor_ = sensor; }
   void set_stack_text_sensor(text_sensor::TextSensor *sensor) { this->stack_text_sensor_ = sensor; }
+  void set_factory_ieee_text_sensor(text_sensor::TextSensor *sensor) { this->factory_ieee_text_sensor_ = sensor; }
   void set_self_ieee_text_sensor(text_sensor::TextSensor *sensor) { this->self_ieee_text_sensor_ = sensor; }
   void set_parent_ieee_text_sensor(text_sensor::TextSensor *sensor) { this->parent_ieee_text_sensor_ = sensor; }
   void set_role_text_sensor(text_sensor::TextSensor *sensor) { this->role_text_sensor_ = sensor; }
@@ -74,6 +75,9 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void set_hardware_text_sensor(text_sensor::TextSensor *sensor) { this->hardware_text_sensor_ = sensor; }
   void set_metadata_status_text_sensor(text_sensor::TextSensor *sensor) {
     this->metadata_status_text_sensor_ = sensor;
+  }
+  void set_network_information_status_text_sensor(text_sensor::TextSensor *sensor) {
+    this->network_information_status_text_sensor_ = sensor;
   }
 
   void set_tcp_port(uint16_t port) {
@@ -179,11 +183,16 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
 
   void setup_metadata_cache_();
   bool refresh_metadata_();
-  bool mark_metadata_dirty_();
-  bool save_metadata_cache_();
+  bool mark_running_image_pending_();
+  bool save_physical_identity_cache_();
+  bool save_running_image_cache_();
+  bool save_network_snapshot_cache_();
   void capture_chip_info_(const ChipInfo &chip);
-  void publish_metadata_record_(const RadioMetadataCache &cache);
+  void publish_physical_identity_(const PhysicalIdentityCache &cache);
+  void publish_running_image_(const RunningImageCache &cache);
+  void publish_network_snapshot_(const NetworkSnapshotCache &cache);
   void publish_metadata_status_(const char *status);
+  void publish_network_information_status_(const char *status);
 
   bool detect_chip_info_(ChipInfo *chip);
   bool read_memory_word_(uint32_t address, const char *name, uint8_t out[4]);
@@ -196,6 +205,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void publish_flash_size_(uint32_t flash_size_bytes);
   void publish_firmware_(const char *firmware);
   void publish_stack_(const char *stack);
+  void publish_factory_ieee_(const char *ieee);
   void publish_self_ieee_(const char *ieee);
   void publish_role_(const char *role);
   void publish_pan_id_(uint16_t pan_id);
@@ -226,12 +236,14 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   binary_sensor::BinarySensor *on_network_binary_sensor_{nullptr};
   text_sensor::TextSensor *firmware_text_sensor_{nullptr};
   text_sensor::TextSensor *stack_text_sensor_{nullptr};
+  text_sensor::TextSensor *factory_ieee_text_sensor_{nullptr};
   text_sensor::TextSensor *self_ieee_text_sensor_{nullptr};
   text_sensor::TextSensor *parent_ieee_text_sensor_{nullptr};
   text_sensor::TextSensor *role_text_sensor_{nullptr};
   text_sensor::TextSensor *ext_pan_id_text_sensor_{nullptr};
   text_sensor::TextSensor *hardware_text_sensor_{nullptr};
   text_sensor::TextSensor *metadata_status_text_sensor_{nullptr};
+  text_sensor::TextSensor *network_information_status_text_sensor_{nullptr};
 
   uint16_t tcp_port_{6638};
   uint32_t pending_socket_timeout_ms_{30000};
@@ -262,12 +274,20 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   uint8_t reset_parser_cmd1_{0};
   uint16_t reset_parser_remaining_{0};
   bool web_handlers_registered_{false};
-  bool metadata_cache_available_{false};
+  bool physical_identity_available_{false};
+  bool running_image_available_{false};
+  bool network_snapshot_available_{false};
   bool metadata_capture_active_{false};
 
-  ESPPreferenceObject metadata_preference_{};
-  RadioMetadataCache metadata_cache_{};
-  RadioMetadataCache metadata_candidate_{};
+  ESPPreferenceObject physical_identity_preference_{};
+  ESPPreferenceObject running_image_preference_{};
+  ESPPreferenceObject network_snapshot_preference_{};
+  PhysicalIdentityCache physical_identity_{};
+  PhysicalIdentityCache physical_identity_candidate_{};
+  RunningImageCache running_image_{};
+  RunningImageCache running_image_candidate_{};
+  NetworkSnapshotCache network_snapshot_{};
+  NetworkSnapshotCache network_snapshot_candidate_{};
 
   ZigbeeSerialInterface serial_{};
   ZigbeeTcpServer tcp_server_{};

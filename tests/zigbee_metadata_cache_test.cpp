@@ -4,62 +4,97 @@
 
 #include "components/zigbee_gateway/zigbee_metadata_cache.h"
 
-using esphome::zigbee_gateway::RADIO_METADATA_CHANNEL;
-using esphome::zigbee_gateway::RADIO_METADATA_HARDWARE;
-using esphome::zigbee_gateway::RADIO_METADATA_ON_NETWORK;
-using esphome::zigbee_gateway::RadioMetadataCache;
-using esphome::zigbee_gateway::copy_radio_metadata_text;
-using esphome::zigbee_gateway::initialize_radio_metadata_cache;
-using esphome::zigbee_gateway::valid_radio_metadata_cache;
+using namespace esphome::zigbee_gateway;
 
 int main() {
-  RadioMetadataCache cache{};
-  assert(!valid_radio_metadata_cache(cache));
+  PhysicalIdentityCache physical{};
+  RunningImageCache image{};
+  NetworkSnapshotCache network{};
+  assert(!valid_physical_identity_cache(physical));
+  assert(!valid_running_image_cache(image));
+  assert(!valid_network_snapshot_cache(network));
 
-  initialize_radio_metadata_cache(&cache, 41);
-  assert(valid_radio_metadata_cache(cache));
-  assert(cache.generation == 41);
-  assert(cache.dirty == 0);
-  assert(cache.known == 0);
+  initialize_physical_identity_cache(&physical, 11);
+  initialize_running_image_cache(&image, 22);
+  initialize_network_snapshot_cache(&network, 33);
+  assert(valid_physical_identity_cache(physical));
+  assert(valid_running_image_cache(image));
+  assert(valid_network_snapshot_cache(network));
+  assert(physical.generation == 11);
+  assert(image.generation == 22);
+  assert(network.generation == 33);
+  assert(image.awaiting_observation == 0);
 
-  assert(copy_radio_metadata_text(cache.hardware, "CC2652P7"));
-  cache.known |= RADIO_METADATA_HARDWARE;
-  cache.channel = 25;
-  cache.known |= RADIO_METADATA_CHANNEL;
-  assert(valid_radio_metadata_cache(cache));
+  // Physical identity has no dirty/pending field. BSL invalidation belongs
+  // exclusively to the running-image record.
+  assert(copy_zigbee_cache_text(physical.hardware, "CC2652P7"));
+  assert(copy_zigbee_cache_text(physical.factory_ieee, "00:11:22:33:44:55:66:77"));
+  physical.known |= PHYSICAL_IDENTITY_HARDWARE | PHYSICAL_IDENTITY_FACTORY_IEEE;
+  physical.flash_size_bytes = 704 * 1024;
+  physical.known |= PHYSICAL_IDENTITY_FLASH_SIZE;
+  assert(valid_physical_identity_cache(physical));
 
-  cache.dirty = 1;
-  assert(valid_radio_metadata_cache(cache));
-  cache.dirty = 2;
-  assert(!valid_radio_metadata_cache(cache));
-  cache.dirty = 0;
+  image.awaiting_observation = 1;
+  assert(valid_running_image_cache(image));
+  image.awaiting_observation = 2;
+  assert(!valid_running_image_cache(image));
+  image.awaiting_observation = 0;
+  assert(copy_zigbee_cache_text(image.firmware, "20260726"));
+  assert(copy_zigbee_cache_text(image.stack, "3.30.0"));
+  assert(copy_zigbee_cache_text(image.active_ieee, "00:11:22:33:44:55:66:77"));
+  assert(copy_zigbee_cache_text(image.role, "Coordinator"));
+  image.known |= RUNNING_IMAGE_FIRMWARE | RUNNING_IMAGE_STACK |
+                 RUNNING_IMAGE_ACTIVE_IEEE | RUNNING_IMAGE_ROLE;
+  assert(valid_running_image_cache(image));
 
-  cache.known |= RADIO_METADATA_ON_NETWORK;
-  cache.on_network = 2;
-  assert(!valid_radio_metadata_cache(cache));
-  cache.on_network = 1;
-  assert(valid_radio_metadata_cache(cache));
+  network.pan_id = 0x1A62;
+  network.channel = 15;
+  network.on_network = 1;
+  assert(copy_zigbee_cache_text(network.parent_ieee, "00:00:00:00:00:00:00:00"));
+  assert(copy_zigbee_cache_text(network.extended_pan_id, "1 2 3 4 5 6 7 8"));
+  network.known = NETWORK_SNAPSHOT_PAN_ID | NETWORK_SNAPSHOT_CHANNEL |
+                  NETWORK_SNAPSHOT_ON_NETWORK | NETWORK_SNAPSHOT_PARENT_IEEE |
+                  NETWORK_SNAPSHOT_EXTENDED_PAN_ID;
+  assert(valid_network_snapshot_cache(network));
+  network.on_network = 2;
+  assert(!valid_network_snapshot_cache(network));
+  network.on_network = 1;
 
-  const uint32_t known = cache.known;
-  cache.known |= 1u << 31;
-  assert(!valid_radio_metadata_cache(cache));
-  cache.known = known;
+  const uint32_t physical_known = physical.known;
+  physical.known |= 1u << 31;
+  assert(!valid_physical_identity_cache(physical));
+  physical.known = physical_known;
 
-  const uint16_t schema = cache.schema;
-  cache.schema++;
-  assert(!valid_radio_metadata_cache(cache));
-  cache.schema = schema;
+  const uint32_t image_known = image.known;
+  image.known |= 1u << 31;
+  assert(!valid_running_image_cache(image));
+  image.known = image_known;
 
-  std::memset(cache.role, 'R', sizeof(cache.role));
-  assert(!valid_radio_metadata_cache(cache));
-  cache.role[sizeof(cache.role) - 1] = '\0';
-  assert(valid_radio_metadata_cache(cache));
+  const uint32_t network_known = network.known;
+  network.known |= 1u << 31;
+  assert(!valid_network_snapshot_cache(network));
+  network.known = network_known;
 
-  char too_long[sizeof(cache.firmware) + 1];
+  physical.schema++;
+  image.schema++;
+  network.schema++;
+  assert(!valid_physical_identity_cache(physical));
+  assert(!valid_running_image_cache(image));
+  assert(!valid_network_snapshot_cache(network));
+  physical.schema = ZIGBEE_CACHE_SCHEMA;
+  image.schema = ZIGBEE_CACHE_SCHEMA;
+  network.schema = ZIGBEE_CACHE_SCHEMA;
+
+  std::memset(image.role, 'R', sizeof(image.role));
+  assert(!valid_running_image_cache(image));
+  image.role[sizeof(image.role) - 1] = '\0';
+  assert(valid_running_image_cache(image));
+
+  char too_long[sizeof(image.firmware) + 1];
   std::memset(too_long, '1', sizeof(too_long) - 1);
   too_long[sizeof(too_long) - 1] = '\0';
-  assert(!copy_radio_metadata_text(cache.firmware, too_long));
-  assert(cache.firmware[0] == '\0');
+  assert(!copy_zigbee_cache_text(image.firmware, too_long));
+  assert(image.firmware[0] == '\0');
 
   return 0;
 }

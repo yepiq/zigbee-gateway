@@ -110,18 +110,18 @@ void ZigbeeGatewayComponent::publish_hardware_(const char *hardware) {
     this->hardware_text_sensor_->publish_state(hardware);
   if (!this->metadata_capture_active_)
     return;
-  if (copy_radio_metadata_text(this->metadata_candidate_.hardware, hardware))
-    this->metadata_candidate_.known |= RADIO_METADATA_HARDWARE;
+  if (copy_zigbee_cache_text(this->physical_identity_candidate_.hardware, hardware))
+    this->physical_identity_candidate_.known |= PHYSICAL_IDENTITY_HARDWARE;
   else
-    this->metadata_candidate_.known &= ~RADIO_METADATA_HARDWARE;
+    this->physical_identity_candidate_.known &= ~PHYSICAL_IDENTITY_HARDWARE;
 }
 
 void ZigbeeGatewayComponent::publish_flash_size_(uint32_t flash_size_bytes) {
   if (this->flash_size_sensor_ != nullptr)
     this->flash_size_sensor_->publish_state(static_cast<float>(flash_size_bytes));
   if (this->metadata_capture_active_) {
-    this->metadata_candidate_.flash_size_bytes = flash_size_bytes;
-    this->metadata_candidate_.known |= RADIO_METADATA_FLASH_SIZE;
+    this->physical_identity_candidate_.flash_size_bytes = flash_size_bytes;
+    this->physical_identity_candidate_.known |= PHYSICAL_IDENTITY_FLASH_SIZE;
   }
 }
 
@@ -131,10 +131,10 @@ void ZigbeeGatewayComponent::publish_firmware_(const char *firmware) {
   if (!this->metadata_capture_active_)
     return;
   if (std::strcmp(firmware, "Unknown") != 0 &&
-      copy_radio_metadata_text(this->metadata_candidate_.firmware, firmware))
-    this->metadata_candidate_.known |= RADIO_METADATA_FIRMWARE;
+      copy_zigbee_cache_text(this->running_image_candidate_.firmware, firmware))
+    this->running_image_candidate_.known |= RUNNING_IMAGE_FIRMWARE;
   else
-    this->metadata_candidate_.known &= ~RADIO_METADATA_FIRMWARE;
+    this->running_image_candidate_.known &= ~RUNNING_IMAGE_FIRMWARE;
 }
 
 void ZigbeeGatewayComponent::publish_stack_(const char *stack) {
@@ -143,10 +143,22 @@ void ZigbeeGatewayComponent::publish_stack_(const char *stack) {
   if (!this->metadata_capture_active_)
     return;
   if (std::strcmp(stack, "Unknown") != 0 &&
-      copy_radio_metadata_text(this->metadata_candidate_.stack, stack))
-    this->metadata_candidate_.known |= RADIO_METADATA_STACK;
+      copy_zigbee_cache_text(this->running_image_candidate_.stack, stack))
+    this->running_image_candidate_.known |= RUNNING_IMAGE_STACK;
   else
-    this->metadata_candidate_.known &= ~RADIO_METADATA_STACK;
+    this->running_image_candidate_.known &= ~RUNNING_IMAGE_STACK;
+}
+
+void ZigbeeGatewayComponent::publish_factory_ieee_(const char *ieee) {
+  if (this->factory_ieee_text_sensor_ != nullptr)
+    this->factory_ieee_text_sensor_->publish_state(ieee);
+  if (!this->metadata_capture_active_)
+    return;
+  if (std::strcmp(ieee, "Unknown") != 0 &&
+      copy_zigbee_cache_text(this->physical_identity_candidate_.factory_ieee, ieee))
+    this->physical_identity_candidate_.known |= PHYSICAL_IDENTITY_FACTORY_IEEE;
+  else
+    this->physical_identity_candidate_.known &= ~PHYSICAL_IDENTITY_FACTORY_IEEE;
 }
 
 void ZigbeeGatewayComponent::publish_self_ieee_(const char *ieee) {
@@ -155,10 +167,10 @@ void ZigbeeGatewayComponent::publish_self_ieee_(const char *ieee) {
   if (!this->metadata_capture_active_)
     return;
   if (std::strcmp(ieee, "Unknown") != 0 &&
-      copy_radio_metadata_text(this->metadata_candidate_.self_ieee, ieee))
-    this->metadata_candidate_.known |= RADIO_METADATA_SELF_IEEE;
+      copy_zigbee_cache_text(this->running_image_candidate_.active_ieee, ieee))
+    this->running_image_candidate_.known |= RUNNING_IMAGE_ACTIVE_IEEE;
   else
-    this->metadata_candidate_.known &= ~RADIO_METADATA_SELF_IEEE;
+    this->running_image_candidate_.known &= ~RUNNING_IMAGE_ACTIVE_IEEE;
 }
 
 void ZigbeeGatewayComponent::publish_role_(const char *role) {
@@ -168,18 +180,18 @@ void ZigbeeGatewayComponent::publish_role_(const char *role) {
   if (!this->metadata_capture_active_)
     return;
   if (std::strcmp(role, "Unknown") != 0 &&
-      copy_radio_metadata_text(this->metadata_candidate_.role, role))
-    this->metadata_candidate_.known |= RADIO_METADATA_ROLE;
+      copy_zigbee_cache_text(this->running_image_candidate_.role, role))
+    this->running_image_candidate_.known |= RUNNING_IMAGE_ROLE;
   else
-    this->metadata_candidate_.known &= ~RADIO_METADATA_ROLE;
+    this->running_image_candidate_.known &= ~RUNNING_IMAGE_ROLE;
 }
 
 void ZigbeeGatewayComponent::publish_pan_id_(uint16_t pan_id) {
   if (this->pan_id_sensor_ != nullptr)
     this->pan_id_sensor_->publish_state(static_cast<float>(pan_id));
   if (this->metadata_capture_active_) {
-    this->metadata_candidate_.pan_id = pan_id;
-    this->metadata_candidate_.known |= RADIO_METADATA_PAN_ID;
+    this->network_snapshot_candidate_.pan_id = pan_id;
+    this->network_snapshot_candidate_.known |= NETWORK_SNAPSHOT_PAN_ID;
   }
 }
 
@@ -187,8 +199,8 @@ void ZigbeeGatewayComponent::publish_channel_(uint8_t channel) {
   if (this->channel_sensor_ != nullptr)
     this->channel_sensor_->publish_state(static_cast<float>(channel));
   if (this->metadata_capture_active_) {
-    this->metadata_candidate_.channel = channel;
-    this->metadata_candidate_.known |= RADIO_METADATA_CHANNEL;
+    this->network_snapshot_candidate_.channel = channel;
+    this->network_snapshot_candidate_.known |= NETWORK_SNAPSHOT_CHANNEL;
   }
 }
 
@@ -196,8 +208,8 @@ void ZigbeeGatewayComponent::publish_on_network_(bool on_network) {
   if (this->on_network_binary_sensor_ != nullptr)
     this->on_network_binary_sensor_->publish_state(on_network);
   if (this->metadata_capture_active_) {
-    this->metadata_candidate_.on_network = on_network;
-    this->metadata_candidate_.known |= RADIO_METADATA_ON_NETWORK;
+    this->network_snapshot_candidate_.on_network = on_network;
+    this->network_snapshot_candidate_.known |= NETWORK_SNAPSHOT_ON_NETWORK;
   }
 }
 
@@ -207,10 +219,10 @@ void ZigbeeGatewayComponent::publish_parent_ieee_(const char *ieee) {
   if (!this->metadata_capture_active_)
     return;
   if (std::strcmp(ieee, "Unknown") != 0 &&
-      copy_radio_metadata_text(this->metadata_candidate_.parent_ieee, ieee))
-    this->metadata_candidate_.known |= RADIO_METADATA_PARENT_IEEE;
+      copy_zigbee_cache_text(this->network_snapshot_candidate_.parent_ieee, ieee))
+    this->network_snapshot_candidate_.known |= NETWORK_SNAPSHOT_PARENT_IEEE;
   else
-    this->metadata_candidate_.known &= ~RADIO_METADATA_PARENT_IEEE;
+    this->network_snapshot_candidate_.known &= ~NETWORK_SNAPSHOT_PARENT_IEEE;
 }
 
 void ZigbeeGatewayComponent::publish_extended_pan_id_(const char *extended_pan_id) {
@@ -219,10 +231,10 @@ void ZigbeeGatewayComponent::publish_extended_pan_id_(const char *extended_pan_i
   if (!this->metadata_capture_active_)
     return;
   if (std::strcmp(extended_pan_id, "Unknown") != 0 &&
-      copy_radio_metadata_text(this->metadata_candidate_.extended_pan_id, extended_pan_id))
-    this->metadata_candidate_.known |= RADIO_METADATA_EXTENDED_PAN_ID;
+      copy_zigbee_cache_text(this->network_snapshot_candidate_.extended_pan_id, extended_pan_id))
+    this->network_snapshot_candidate_.known |= NETWORK_SNAPSHOT_EXTENDED_PAN_ID;
   else
-    this->metadata_candidate_.known &= ~RADIO_METADATA_EXTENDED_PAN_ID;
+    this->network_snapshot_candidate_.known &= ~NETWORK_SNAPSHOT_EXTENDED_PAN_ID;
 }
 
 void ZigbeeGatewayComponent::publish_metadata_status_(const char *status) {
@@ -230,101 +242,168 @@ void ZigbeeGatewayComponent::publish_metadata_status_(const char *status) {
     this->metadata_status_text_sensor_->publish_state(status);
 }
 
-void ZigbeeGatewayComponent::publish_metadata_record_(const RadioMetadataCache &cache) {
-  this->publish_hardware_((cache.known & RADIO_METADATA_HARDWARE) != 0 ? cache.hardware : "Unknown");
+void ZigbeeGatewayComponent::publish_network_information_status_(const char *status) {
+  if (this->network_information_status_text_sensor_ != nullptr)
+    this->network_information_status_text_sensor_->publish_state(status);
+}
+
+void ZigbeeGatewayComponent::publish_physical_identity_(const PhysicalIdentityCache &cache) {
+  this->publish_hardware_(
+      (cache.known & PHYSICAL_IDENTITY_HARDWARE) != 0 ? cache.hardware : "Unknown");
   if (this->flash_size_sensor_ != nullptr) {
     this->flash_size_sensor_->publish_state(
-        (cache.known & RADIO_METADATA_FLASH_SIZE) != 0 ? static_cast<float>(cache.flash_size_bytes) : NAN);
+        (cache.known & PHYSICAL_IDENTITY_FLASH_SIZE) != 0 ? static_cast<float>(cache.flash_size_bytes) : NAN);
   }
-  this->publish_firmware_((cache.known & RADIO_METADATA_FIRMWARE) != 0 ? cache.firmware : "Unknown");
-  this->publish_stack_((cache.known & RADIO_METADATA_STACK) != 0 ? cache.stack : "Unknown");
-  this->publish_self_ieee_((cache.known & RADIO_METADATA_SELF_IEEE) != 0 ? cache.self_ieee : "Unknown");
-  this->publish_role_((cache.known & RADIO_METADATA_ROLE) != 0 ? cache.role : "Unknown");
+  this->publish_factory_ieee_(
+      (cache.known & PHYSICAL_IDENTITY_FACTORY_IEEE) != 0 ? cache.factory_ieee : "Unknown");
+}
+
+void ZigbeeGatewayComponent::publish_running_image_(const RunningImageCache &cache) {
+  this->publish_firmware_(
+      (cache.known & RUNNING_IMAGE_FIRMWARE) != 0 ? cache.firmware : "Unknown");
+  this->publish_stack_((cache.known & RUNNING_IMAGE_STACK) != 0 ? cache.stack : "Unknown");
+  this->publish_self_ieee_(
+      (cache.known & RUNNING_IMAGE_ACTIVE_IEEE) != 0 ? cache.active_ieee : "Unknown");
+  this->publish_role_((cache.known & RUNNING_IMAGE_ROLE) != 0 ? cache.role : "Unknown");
+}
+
+void ZigbeeGatewayComponent::publish_network_snapshot_(const NetworkSnapshotCache &cache) {
   if (this->pan_id_sensor_ != nullptr) {
     this->pan_id_sensor_->publish_state(
-        (cache.known & RADIO_METADATA_PAN_ID) != 0 ? static_cast<float>(cache.pan_id) : NAN);
+        (cache.known & NETWORK_SNAPSHOT_PAN_ID) != 0 ? static_cast<float>(cache.pan_id) : NAN);
   }
   if (this->channel_sensor_ != nullptr) {
     this->channel_sensor_->publish_state(
-        (cache.known & RADIO_METADATA_CHANNEL) != 0 ? static_cast<float>(cache.channel) : NAN);
+        (cache.known & NETWORK_SNAPSHOT_CHANNEL) != 0 ? static_cast<float>(cache.channel) : NAN);
   }
   if (this->on_network_binary_sensor_ != nullptr) {
-    if ((cache.known & RADIO_METADATA_ON_NETWORK) != 0)
+    if ((cache.known & NETWORK_SNAPSHOT_ON_NETWORK) != 0)
       this->on_network_binary_sensor_->publish_state(cache.on_network != 0);
     else
       this->on_network_binary_sensor_->invalidate_state();
   }
   this->publish_parent_ieee_(
-      (cache.known & RADIO_METADATA_PARENT_IEEE) != 0 ? cache.parent_ieee : "Unknown");
+      (cache.known & NETWORK_SNAPSHOT_PARENT_IEEE) != 0 ? cache.parent_ieee : "Unknown");
   this->publish_extended_pan_id_(
-      (cache.known & RADIO_METADATA_EXTENDED_PAN_ID) != 0 ? cache.extended_pan_id : "Unknown");
+      (cache.known & NETWORK_SNAPSHOT_EXTENDED_PAN_ID) != 0 ? cache.extended_pan_id : "Unknown");
 }
 
-bool ZigbeeGatewayComponent::save_metadata_cache_() {
-  if (!this->metadata_preference_.save(&this->metadata_cache_)) {
-    ESP_LOGE(TAG, "Failed to queue Zigbee metadata preference.");
+bool ZigbeeGatewayComponent::save_physical_identity_cache_() {
+  if (!this->physical_identity_preference_.save(&this->physical_identity_)) {
+    ESP_LOGE(TAG, "Failed to queue Zigbee physical identity preference.");
     return false;
   }
   if (global_preferences == nullptr || !global_preferences->sync()) {
-    ESP_LOGE(TAG, "Failed to commit Zigbee metadata preference.");
+    ESP_LOGE(TAG, "Failed to commit Zigbee physical identity preference.");
     return false;
   }
   return true;
 }
 
-bool ZigbeeGatewayComponent::mark_metadata_dirty_() {
-  if (!this->metadata_cache_available_) {
-    initialize_radio_metadata_cache(&this->metadata_cache_);
-    this->metadata_cache_available_ = true;
+bool ZigbeeGatewayComponent::save_running_image_cache_() {
+  if (!this->running_image_preference_.save(&this->running_image_)) {
+    ESP_LOGE(TAG, "Failed to queue Zigbee running image preference.");
+    return false;
   }
-  this->metadata_cache_.dirty = 1;
-  const bool saved = this->save_metadata_cache_();
-  this->publish_metadata_status_(this->metadata_cache_.known != 0 ? "Stale" : "Unavailable");
+  if (global_preferences == nullptr || !global_preferences->sync()) {
+    ESP_LOGE(TAG, "Failed to commit Zigbee running image preference.");
+    return false;
+  }
+  return true;
+}
+
+bool ZigbeeGatewayComponent::save_network_snapshot_cache_() {
+  if (!this->network_snapshot_preference_.save(&this->network_snapshot_)) {
+    ESP_LOGE(TAG, "Failed to queue Zigbee network snapshot preference.");
+    return false;
+  }
+  if (global_preferences == nullptr || !global_preferences->sync()) {
+    ESP_LOGE(TAG, "Failed to commit Zigbee network snapshot preference.");
+    return false;
+  }
+  return true;
+}
+
+bool ZigbeeGatewayComponent::mark_running_image_pending_() {
+  if (!this->running_image_available_) {
+    initialize_running_image_cache(&this->running_image_);
+    this->running_image_available_ = true;
+  }
+  this->running_image_.awaiting_observation = 1;
+  const bool saved = this->save_running_image_cache_();
+  this->publish_metadata_status_(
+      this->running_image_.known != 0 ? "Awaiting Observation" : "Unavailable");
+  if (this->network_snapshot_available_ && this->network_snapshot_.known != 0)
+    this->publish_network_information_status_("Cached");
   if (!saved)
-    ESP_LOGE(TAG, "Could not persist the pre-BSL dirty marker; cached metadata is unsafe after reboot.");
+    ESP_LOGE(TAG, "Could not persist the pre-BSL running-image marker.");
   return saved;
 }
 
 void ZigbeeGatewayComponent::capture_chip_info_(const ChipInfo &chip) {
   if (!this->metadata_capture_active_)
     return;
-  this->metadata_candidate_.chip_family = static_cast<uint8_t>(chip.family);
-  this->metadata_candidate_.chip_id_be = chip.chip_id_be;
-  this->metadata_candidate_.chip_id_16 = chip.chip_id_16;
-  this->metadata_candidate_.wafer_id = chip.wafer_id;
-  this->metadata_candidate_.pg_rev = chip.pg_rev;
-  this->metadata_candidate_.protocols = chip.protocols;
-  this->metadata_candidate_.flash_pages = chip.flash_pages;
-  this->metadata_candidate_.mode_cfg = chip.mode_cfg;
-  this->metadata_candidate_.bsl_cfg = chip.bsl_cfg;
+  this->physical_identity_candidate_.chip_family = static_cast<uint8_t>(chip.family);
+  this->physical_identity_candidate_.chip_id_be = chip.chip_id_be;
+  this->physical_identity_candidate_.chip_id_16 = chip.chip_id_16;
+  this->physical_identity_candidate_.wafer_id = chip.wafer_id;
+  this->physical_identity_candidate_.pg_rev = chip.pg_rev;
+  this->physical_identity_candidate_.protocols = chip.protocols;
+  this->physical_identity_candidate_.flash_pages = chip.flash_pages;
+  this->running_image_candidate_.mode_cfg = chip.mode_cfg;
+  this->running_image_candidate_.bsl_cfg = chip.bsl_cfg;
+  this->running_image_candidate_.known |= RUNNING_IMAGE_MODE_CFG | RUNNING_IMAGE_BSL_CFG;
 }
 
 void ZigbeeGatewayComponent::setup_metadata_cache_() {
-  this->metadata_preference_ = global_preferences->make_preference<RadioMetadataCache>(
-      fnv1_hash("zigbee_gateway.radio_metadata"), true);
+  this->physical_identity_preference_ = global_preferences->make_preference<PhysicalIdentityCache>(
+      fnv1_hash("zigbee_gateway.physical_identity"), true);
+  this->running_image_preference_ = global_preferences->make_preference<RunningImageCache>(
+      fnv1_hash("zigbee_gateway.running_image"), true);
+  this->network_snapshot_preference_ = global_preferences->make_preference<NetworkSnapshotCache>(
+      fnv1_hash("zigbee_gateway.network_snapshot"), true);
 
-  RadioMetadataCache loaded{};
-  if (this->metadata_preference_.load(&loaded) && valid_radio_metadata_cache(loaded)) {
-    this->metadata_cache_ = loaded;
-    this->metadata_cache_available_ = true;
-    this->publish_metadata_record_(this->metadata_cache_);
-    if (this->metadata_cache_.dirty == 0) {
-      ESP_LOGI(TAG, "Restored Zigbee metadata cache generation %u; startup radio probe skipped.",
-               (unsigned) this->metadata_cache_.generation);
-      this->publish_metadata_status_("Restored");
-      return;
-    }
-    ESP_LOGW(TAG, "Zigbee metadata cache generation %u is dirty; refreshing before TCP startup.",
-             (unsigned) this->metadata_cache_.generation);
-    this->publish_metadata_status_("Stale");
+  PhysicalIdentityCache physical{};
+  if (this->physical_identity_preference_.load(&physical) && valid_physical_identity_cache(physical)) {
+    this->physical_identity_ = physical;
+    this->physical_identity_available_ = true;
   } else {
-    initialize_radio_metadata_cache(&this->metadata_cache_);
-    this->metadata_cache_available_ = false;
-    this->publish_metadata_record_(this->metadata_cache_);
-    this->publish_metadata_status_("Unavailable");
-    ESP_LOGI(TAG, "No compatible Zigbee metadata cache; running initial identification.");
+    initialize_physical_identity_cache(&this->physical_identity_);
+  }
+  this->publish_physical_identity_(this->physical_identity_);
+
+  RunningImageCache image{};
+  if (this->running_image_preference_.load(&image) && valid_running_image_cache(image)) {
+    this->running_image_ = image;
+    this->running_image_available_ = true;
+  } else {
+    initialize_running_image_cache(&this->running_image_);
+  }
+  this->publish_running_image_(this->running_image_);
+
+  NetworkSnapshotCache network{};
+  if (this->network_snapshot_preference_.load(&network) && valid_network_snapshot_cache(network)) {
+    this->network_snapshot_ = network;
+    this->network_snapshot_available_ = true;
+  } else {
+    initialize_network_snapshot_cache(&this->network_snapshot_);
+  }
+  this->publish_network_snapshot_(this->network_snapshot_);
+  this->publish_network_information_status_(
+      this->network_snapshot_available_ && this->network_snapshot_.known != 0 ? "Cached" : "Unavailable");
+
+  if (this->physical_identity_available_ && this->running_image_available_ &&
+      this->running_image_.awaiting_observation == 0) {
+    ESP_LOGI(TAG,
+             "Restored physical identity generation %u and running image generation %u; "
+             "startup radio probe skipped.",
+             (unsigned) this->physical_identity_.generation,
+             (unsigned) this->running_image_.generation);
+    this->publish_metadata_status_("Restored");
+    return;
   }
 
+  ESP_LOGI(TAG, "Physical identity or running image information is unavailable; running identification.");
   this->refresh_metadata_();
 }
 
@@ -334,10 +413,17 @@ bool ZigbeeGatewayComponent::refresh_metadata_() {
     return false;
   }
 
-  this->mark_metadata_dirty_();
-  const uint32_t next_generation = this->metadata_cache_.generation + 1;
-  initialize_radio_metadata_cache(&this->metadata_candidate_, next_generation);
-  this->metadata_candidate_.dirty = 1;
+  this->mark_running_image_pending_();
+  if (this->physical_identity_available_)
+    this->physical_identity_candidate_ = this->physical_identity_;
+  else
+    initialize_physical_identity_cache(
+        &this->physical_identity_candidate_, this->physical_identity_.generation + 1);
+  initialize_running_image_cache(
+      &this->running_image_candidate_, this->running_image_.generation + 1);
+  this->running_image_candidate_.awaiting_observation = 1;
+  initialize_network_snapshot_cache(
+      &this->network_snapshot_candidate_, this->network_snapshot_.generation + 1);
   this->metadata_capture_active_ = true;
   this->role_ = "Unknown";
   this->publish_metadata_status_("Refreshing");
@@ -346,22 +432,47 @@ bool ZigbeeGatewayComponent::refresh_metadata_() {
   this->metadata_capture_active_ = false;
 
   if (!identified) {
-    ESP_LOGW(TAG, "Zigbee metadata refresh failed; retaining the last known snapshot as stale.");
-    this->publish_metadata_record_(this->metadata_cache_);
-    this->publish_metadata_status_(this->metadata_cache_.known != 0 ? "Stale" : "Unavailable");
+    ESP_LOGW(TAG, "Zigbee information refresh failed; retaining independently cached records.");
+    this->publish_physical_identity_(this->physical_identity_);
+    this->publish_running_image_(this->running_image_);
+    this->publish_network_snapshot_(this->network_snapshot_);
+    this->publish_metadata_status_(
+        this->running_image_.known != 0 ? "Awaiting Observation" : "Unavailable");
+    this->publish_network_information_status_(
+        this->network_snapshot_.known != 0 ? "Cached" : "Unavailable");
     return false;
   }
 
-  this->metadata_candidate_.dirty = 0;
-  this->metadata_cache_ = this->metadata_candidate_;
-  this->metadata_cache_available_ = true;
-  this->publish_metadata_record_(this->metadata_cache_);
-  if (this->save_metadata_cache_()) {
-    ESP_LOGI(TAG, "Saved verified Zigbee metadata cache generation %u.",
-             (unsigned) this->metadata_cache_.generation);
-  } else {
-    ESP_LOGE(TAG, "Radio metadata is verified for this boot but could not be saved.");
+  if (!this->physical_identity_available_) {
+    this->physical_identity_ = this->physical_identity_candidate_;
+    this->physical_identity_available_ = true;
+    if (!this->save_physical_identity_cache_())
+      ESP_LOGE(TAG, "Verified physical identity could not be saved.");
   }
+  this->running_image_candidate_.awaiting_observation = 0;
+  this->running_image_ = this->running_image_candidate_;
+  this->running_image_available_ = true;
+  if (!this->save_running_image_cache_())
+    ESP_LOGE(TAG, "Verified running image information could not be saved.");
+
+  if (this->network_snapshot_candidate_.known != 0) {
+    this->network_snapshot_ = this->network_snapshot_candidate_;
+    this->network_snapshot_available_ = true;
+    if (!this->save_network_snapshot_cache_())
+      ESP_LOGE(TAG, "Refreshed Zigbee network snapshot could not be saved.");
+    this->publish_network_information_status_("Refreshed");
+  } else {
+    this->publish_network_information_status_(
+        this->network_snapshot_.known != 0 ? "Cached" : "Unavailable");
+  }
+
+  this->publish_physical_identity_(this->physical_identity_);
+  this->publish_running_image_(this->running_image_);
+  this->publish_network_snapshot_(this->network_snapshot_);
+  ESP_LOGI(TAG, "Saved Zigbee identity scopes: physical=%u image=%u network=%u.",
+           (unsigned) this->physical_identity_.generation,
+           (unsigned) this->running_image_.generation,
+           (unsigned) this->network_snapshot_.generation);
   this->publish_metadata_status_("Verified");
   return true;
 }
@@ -582,7 +693,7 @@ void ZigbeeGatewayComponent::request_bsl_() {
   ESP_LOGI(TAG, "Put Zigbee in BSL mode.");
   this->operation_active_ = true;
   this->sniffer_enabled_ = false;
-  this->mark_metadata_dirty_();
+  this->mark_running_image_pending_();
   this->bsl_pin_->digital_write(true);
   this->reset_pin_->digital_write(true);
 
@@ -653,7 +764,7 @@ void ZigbeeGatewayComponent::enter_bsl_for_remote_() {
   // The TCP server has already selected the exclusive maintenance owner and
   // quarantined any normal client. Keep the raw stream opaque: only manipulate
   // the radio pins here; the external tool owns every following BSL byte.
-  this->mark_metadata_dirty_();
+  this->mark_running_image_pending_();
   this->enter_bsl_blocking_();
 }
 
@@ -730,16 +841,17 @@ bool ZigbeeGatewayComponent::set_radio_connection_led_(bool on) {
 void ZigbeeGatewayComponent::on_tcp_maintenance_finished_() {
   // Transparent BSL access can replace coordinator firmware with router
   // firmware (or vice versa) without the ESP32 observing the image. A BSL
-  // session dirtied the snapshot before pin takeover; identify the resulting
-  // image locally before admitting the next normal TCP owner.
+  // session marked only the mutable running-image record before pin takeover;
+  // identify the resulting image locally before admitting the next normal TCP
+  // owner. Physical identity remains valid for the lifetime of the radio.
   this->sniffer_enabled_ = true;
-  if (!this->metadata_cache_available_ || this->metadata_cache_.dirty == 0) {
-    ESP_LOGI(TAG, "Maintenance transport ended without a BSL metadata change.");
+  if (!this->running_image_available_ || this->running_image_.awaiting_observation == 0) {
+    ESP_LOGI(TAG, "Maintenance transport ended without a pending running-image change.");
     return;
   }
   if (!this->serial_.claim(ZigbeeSerialInterface::Owner::LOCAL)) {
     ESP_LOGE(TAG, "Could not claim UART for post-maintenance metadata refresh.");
-    this->publish_metadata_status_("Stale");
+    this->publish_metadata_status_("Awaiting Observation");
     return;
   }
 
@@ -1031,7 +1143,7 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
                  ieee_msw[2], ieee_msw[1], ieee_msw[0], ieee_lsw[3], ieee_lsw[2], ieee_lsw[1],
                  ieee_lsw[0]);
         ESP_LOGI(TAG, "IEEE (BSL): %s", ieee);
-        this->publish_self_ieee_(ieee);
+        this->publish_factory_ieee_(ieee);
       } else {
         ESP_LOGW(TAG, "IEEE primary-address read failed.");
       }

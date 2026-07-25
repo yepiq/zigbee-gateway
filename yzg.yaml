@@ -69,7 +69,7 @@ esphome:
   name_add_mac_suffix: false
   project:
     name: yepiq.Zigbee_Gateway
-    version: '1.98b'
+    version: '1.99b'
 
 esp32:
   board: esp32dev
@@ -188,8 +188,10 @@ zigbee_gateway:
     name: Zigbee Firmware
   stack:
     name: Zigbee Stack
+  factory_ieee:
+    name: Zigbee Factory IEEE Address
   self_ieee:
-    name: Zigbee Self IEEE Address
+    name: Zigbee Active IEEE Address
   parent_ieee:
     name: Zigbee Parent IEEE Address
   role:
@@ -200,6 +202,8 @@ zigbee_gateway:
     name: Zigbee Hardware
   metadata_status:
     name: Zigbee Metadata Status
+  network_information_status:
+    name: Zigbee Network Information Status
 
 ### CONTROL SETTINGS
 
