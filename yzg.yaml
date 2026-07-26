@@ -102,31 +102,6 @@ zigbee_gateway:
   pending_socket_timeout: ${tcp_pending_socket_timeout_ms}ms
   parked_socket_timeout: ${tcp_parked_socket_timeout_ms}ms
 
-  socket_connected:
-    name: Socket Status
-    id: socket_status
-    entity_category: diagnostic
-  connection_count:
-    name: Socket Connections
-    id: socket_connections
-    entity_category: diagnostic
-  transport_state:
-    name: Zigbee TCP State
-  pending_socket:
-    name: Zigbee TCP Pending Socket
-  parked_socket:
-    name: Zigbee TCP Parked Socket
-  last_transport_event:
-    name: Zigbee TCP Last Event
-  rejected_connections:
-    name: Zigbee TCP Rejected Connections
-  pending_timeouts:
-    name: Zigbee TCP Pending Timeouts
-  maintenance_sessions:
-    name: Zigbee TCP Maintenance Sessions
-  recovery_resets:
-    name: Zigbee TCP Recovery Resets
-
   reset_pin:
     number: ${zRST_pin}
     inverted: ${zRST_inverted}
@@ -142,50 +117,6 @@ zigbee_gateway:
     number: ${led_red_pin}
     inverted: ${led_red_inverted}
     ignore_strapping_warning: ${led_red_strapping}
-
-  serial_transport:
-    name: Zigbee Serial Transport
-    id: select_mode
-
-  restart:
-    name: Restart Zigbee
-  enter_bsl:
-    name: Zigbee BSL Mode
-  router_rejoin:
-    name: Zigbee Router Rejoin
-  refresh_metadata:
-    name: Refresh Zigbee Information
-
-  flash_size:
-    name: Zigbee Flash Size
-  tx_power:
-    name: Zigbee TX Power
-  pan_id:
-    name: Zigbee PAN ID
-  channel:
-    name: Zigbee Channel
-  on_network:
-    name: Zigbee Network Status
-  firmware:
-    name: Zigbee Firmware
-  stack:
-    name: Zigbee Stack
-  factory_ieee:
-    name: Zigbee Factory IEEE Address
-  self_ieee:
-    name: Zigbee Active IEEE Address
-  parent_ieee:
-    name: Zigbee Parent IEEE Address
-  role:
-    name: Zigbee Role
-  extended_pan_id:
-    name: Zigbee Extended PAN ID
-  hardware:
-    name: Zigbee Hardware
-  metadata_status:
-    name: Zigbee Metadata Status
-  network_information_status:
-    name: Zigbee Network Information Status
 
 ### CONTROL SETTINGS
 

@@ -18,8 +18,10 @@ external_components:
     components: [zigbee_gateway]
 ```
 
-See [`yzg.yaml`](../../yzg.yaml) for a complete UZG-01 configuration. All entity
-parameters accept the standard ESPHome options for their entity type.
+See [`yzg.yaml`](../../yzg.yaml) for a complete UZG-01 configuration. The
+component creates its controls and information entities automatically. Add an
+entity parameter only to override standard ESPHome options such as `name`,
+`icon`, `internal`, or `disabled_by_default`.
 
 ## Hardware and transport
 
@@ -32,7 +34,7 @@ parameters accept the standard ESPHome options for their entity type.
 | `bsl_pin` | Yes | — | Zigbee BSL/router-rejoin output |
 | `mode_pin` | Yes | — | Hardware selector; high enables USB Direct on UZG-01 |
 | `mode_led_pin` | Yes | — | Transport-mode LED output |
-| `serial_transport` | Yes | — | Select entity with `TCP`, `USB Bridged`, and `USB Direct` |
+| `serial_transport` | No | `Zigbee Serial Transport` | Select entity with `TCP`, `USB Bridged`, and `USB Direct` |
 | `tcp_port` | No | `6638` | Raw TCP serial port |
 | `pending_socket_timeout` | No | `30s` | Time allowed for a pending socket to request maintenance |
 | `parked_socket_timeout` | No | `10min` | Maximum time to retain a quarantined normal socket |
@@ -40,53 +42,53 @@ parameters accept the standard ESPHome options for their entity type.
 
 ## Transport diagnostics
 
-These entity parameters are required:
+These diagnostic entities are created automatically:
 
-| Parameter | Type | Published value |
+| Parameter | Default entity | Published value |
 | --- | --- | --- |
-| `socket_connected` | Binary sensor | At least one active, pending, or parked TCP socket exists |
-| `connection_count` | Sensor | Total active, pending, and parked TCP sockets |
-| `transport_state` | Text sensor | `idle`, `provisional`, `normal`, or `maintenance` |
-| `pending_socket` | Binary sensor | A maintenance candidate occupies the pending slot |
-| `parked_socket` | Binary sensor | The previous normal client is quarantined |
-| `last_transport_event` | Text sensor | Most recent TCP state transition |
-| `rejected_connections` | Sensor | Connections rejected since boot |
-| `pending_timeouts` | Sensor | Pending sockets timed out since boot |
-| `maintenance_sessions` | Sensor | Maintenance sessions started since boot |
-| `recovery_resets` | Sensor | Post-maintenance recovery resets since boot |
+| `socket_connected` | Socket Status | At least one active, pending, or parked TCP socket exists |
+| `connection_count` | Socket Connections | Total active, pending, and parked TCP sockets |
+| `transport_state` | Zigbee TCP State | `idle`, `provisional`, `normal`, or `maintenance` |
+| `pending_socket` | Zigbee TCP Pending Socket | A maintenance candidate occupies the pending slot |
+| `parked_socket` | Zigbee TCP Parked Socket | The previous normal client is quarantined |
+| `last_transport_event` | Zigbee TCP Last Event | Most recent TCP state transition |
+| `rejected_connections` | Zigbee TCP Rejected Connections | Connections rejected since boot |
+| `pending_timeouts` | Zigbee TCP Pending Timeouts | Pending sockets timed out since boot |
+| `maintenance_sessions` | Zigbee TCP Maintenance Sessions | Maintenance sessions started since boot |
+| `recovery_resets` | Zigbee TCP Recovery Resets | Post-maintenance recovery resets since boot |
 
 ## Radio and network information
 
-These entity parameters are required:
+These information entities are created automatically:
 
-| Parameter | Type | Published value |
+| Parameter | Default entity | Published value |
 | --- | --- | --- |
-| `hardware` | Text sensor | Detected TI radio family and variant |
-| `flash_size` | Sensor | Radio flash capacity in bytes |
-| `firmware` | Text sensor | ZNP firmware revision |
-| `stack` | Text sensor | Z-Stack version |
-| `factory_ieee` | Text sensor | Factory EUI-64 |
-| `self_ieee` | Text sensor | Active IEEE address reported by ZNP |
-| `role` | Text sensor | Coordinator, router, end device, or unknown |
-| `tx_power` | Sensor | Passively observed ZNP transmit-power setting |
-| `pan_id` | Sensor | Zigbee PAN ID |
-| `channel` | Sensor | Zigbee channel |
-| `on_network` | Binary sensor | Joined network state |
-| `parent_ieee` | Text sensor | Parent/coordinator IEEE address |
-| `extended_pan_id` | Text sensor | Extended PAN ID |
-| `metadata_status` | Text sensor | Physical/running-image information provenance |
-| `network_information_status` | Text sensor | Network-snapshot provenance |
+| `hardware` | Zigbee Hardware | Detected TI radio family and variant |
+| `flash_size` | Zigbee Flash Size | Radio flash capacity in bytes |
+| `firmware` | Zigbee Firmware | ZNP firmware revision |
+| `stack` | Zigbee Stack | Z-Stack version |
+| `factory_ieee` | Zigbee Factory IEEE Address | Factory EUI-64 |
+| `self_ieee` | Zigbee Active IEEE Address | Active IEEE address reported by ZNP |
+| `role` | Zigbee Role | Coordinator, router, end device, or unknown |
+| `tx_power` | Zigbee TX Power | Passively observed ZNP transmit-power setting |
+| `pan_id` | Zigbee PAN ID | Zigbee PAN ID |
+| `channel` | Zigbee Channel | Zigbee channel |
+| `on_network` | Zigbee Network Status | Joined network state |
+| `parent_ieee` | Zigbee Parent IEEE Address | Parent/coordinator IEEE address |
+| `extended_pan_id` | Zigbee Extended PAN ID | Extended PAN ID |
+| `metadata_status` | Zigbee Metadata Status | Physical/running-image information provenance |
+| `network_information_status` | Zigbee Network Information Status | Network-snapshot provenance |
 
 ## Controls
 
-These button parameters are optional:
+These controls are created automatically:
 
-| Parameter | Action |
-| --- | --- |
-| `restart` | Restart Zigbee |
-| `enter_bsl` | Enter Zigbee BSL mode |
-| `router_rejoin` | Pulse the router-rejoin pin |
-| `refresh_metadata` | Run local Zigbee identification |
+| Parameter | Default entity | Action |
+| --- | --- | --- |
+| `restart` | Restart Zigbee | Restart the TI radio |
+| `enter_bsl` | Zigbee BSL Mode | Prepare the TI radio for a firmware update |
+| `router_rejoin` | Zigbee Router Rejoin | Allow router firmware to join or rejoin a network |
+| `refresh_metadata` | Refresh Zigbee Information | Run local Zigbee identification |
 
 `refresh_metadata` is intrusive. It runs only in TCP mode with no connected
 socket and is rejected in both USB modes.

@@ -4,6 +4,7 @@ from esphome.components import binary_sensor, button, select, sensor, text_senso
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ID,
+    CONF_NAME,
     CONF_RESET_PIN,
     DEVICE_CLASS_CONNECTIVITY,
     DEVICE_CLASS_DATA_SIZE,
@@ -63,6 +64,51 @@ CONF_ENTER_BSL = "enter_bsl"
 CONF_ROUTER_REJOIN = "router_rejoin"
 CONF_REFRESH_METADATA = "refresh_metadata"
 
+ENTITY_DEFAULT_NAMES = {
+    CONF_SERIAL_TRANSPORT: "Zigbee Serial Transport",
+    CONF_SOCKET_CONNECTED: "Socket Status",
+    CONF_CONNECTION_COUNT: "Socket Connections",
+    CONF_TRANSPORT_STATE: "Zigbee TCP State",
+    CONF_PENDING_SOCKET: "Zigbee TCP Pending Socket",
+    CONF_PARKED_SOCKET: "Zigbee TCP Parked Socket",
+    CONF_LAST_TRANSPORT_EVENT: "Zigbee TCP Last Event",
+    CONF_REJECTED_CONNECTIONS: "Zigbee TCP Rejected Connections",
+    CONF_PENDING_TIMEOUTS: "Zigbee TCP Pending Timeouts",
+    CONF_MAINTENANCE_SESSIONS: "Zigbee TCP Maintenance Sessions",
+    CONF_RECOVERY_RESETS: "Zigbee TCP Recovery Resets",
+    CONF_FLASH_SIZE: "Zigbee Flash Size",
+    CONF_TX_POWER: "Zigbee TX Power",
+    CONF_PAN_ID: "Zigbee PAN ID",
+    CONF_CHANNEL: "Zigbee Channel",
+    CONF_ON_NETWORK: "Zigbee Network Status",
+    CONF_FIRMWARE: "Zigbee Firmware",
+    CONF_STACK: "Zigbee Stack",
+    CONF_FACTORY_IEEE: "Zigbee Factory IEEE Address",
+    CONF_SELF_IEEE: "Zigbee Active IEEE Address",
+    CONF_PARENT_IEEE: "Zigbee Parent IEEE Address",
+    CONF_ROLE: "Zigbee Role",
+    CONF_EXTENDED_PAN_ID: "Zigbee Extended PAN ID",
+    CONF_HARDWARE: "Zigbee Hardware",
+    CONF_METADATA_STATUS: "Zigbee Metadata Status",
+    CONF_NETWORK_INFORMATION_STATUS: "Zigbee Network Information Status",
+    CONF_RESTART: "Restart Zigbee",
+    CONF_ENTER_BSL: "Zigbee BSL Mode",
+    CONF_ROUTER_REJOIN: "Zigbee Router Rejoin",
+    CONF_REFRESH_METADATA: "Refresh Zigbee Information",
+}
+
+
+def apply_entity_defaults(config):
+    config = dict(config)
+    for key, name in ENTITY_DEFAULT_NAMES.items():
+        entity_config = dict(config.get(key, {}))
+        entity_config.setdefault(CONF_NAME, name)
+        config[key] = entity_config
+
+    config[CONF_SERIAL_TRANSPORT].setdefault(CONF_ID, "select_mode")
+    return config
+
+
 zigbee_gateway_ns = cg.esphome_ns.namespace("zigbee_gateway")
 ZigbeeGatewayComponent = zigbee_gateway_ns.class_(
     "ZigbeeGatewayComponent", cg.Component, uart.UARTDevice
@@ -89,6 +135,7 @@ ZigbeeTransportSelect = zigbee_gateway_ns.class_(
 )
 
 CONFIG_SCHEMA = cv.All(
+    apply_entity_defaults,
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(ZigbeeGatewayComponent),
@@ -97,56 +144,56 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_MODE_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_MODE_LED_PIN): pins.gpio_output_pin_schema,
             cv.Required(CONF_USB_UART_ID): cv.use_id(uart.UARTComponent),
-            cv.Required(CONF_SERIAL_TRANSPORT): select.select_schema(
+            cv.Optional(CONF_SERIAL_TRANSPORT): select.select_schema(
                 ZigbeeTransportSelect,
                 entity_category=ENTITY_CATEGORY_CONFIG,
                 icon="mdi:swap-horizontal",
             ),
-            cv.Required(CONF_SOCKET_CONNECTED): binary_sensor.binary_sensor_schema(
+            cv.Optional(CONF_SOCKET_CONNECTED): binary_sensor.binary_sensor_schema(
                 device_class=DEVICE_CLASS_CONNECTIVITY,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             ),
-            cv.Required(CONF_CONNECTION_COUNT): sensor.sensor_schema(
+            cv.Optional(CONF_CONNECTION_COUNT): sensor.sensor_schema(
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_MEASUREMENT,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:counter",
             ),
-            cv.Required(CONF_TRANSPORT_STATE): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_TRANSPORT_STATE): text_sensor.text_sensor_schema(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:serial-port",
             ),
-            cv.Required(CONF_PENDING_SOCKET): binary_sensor.binary_sensor_schema(
+            cv.Optional(CONF_PENDING_SOCKET): binary_sensor.binary_sensor_schema(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:timer-sand",
             ),
-            cv.Required(CONF_PARKED_SOCKET): binary_sensor.binary_sensor_schema(
+            cv.Optional(CONF_PARKED_SOCKET): binary_sensor.binary_sensor_schema(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:pause-circle-outline",
             ),
-            cv.Required(CONF_LAST_TRANSPORT_EVENT): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_LAST_TRANSPORT_EVENT): text_sensor.text_sensor_schema(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:timeline-text-outline",
             ),
-            cv.Required(CONF_REJECTED_CONNECTIONS): sensor.sensor_schema(
+            cv.Optional(CONF_REJECTED_CONNECTIONS): sensor.sensor_schema(
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_TOTAL_INCREASING,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:lan-disconnect",
             ),
-            cv.Required(CONF_PENDING_TIMEOUTS): sensor.sensor_schema(
+            cv.Optional(CONF_PENDING_TIMEOUTS): sensor.sensor_schema(
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_TOTAL_INCREASING,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:timer-alert-outline",
             ),
-            cv.Required(CONF_MAINTENANCE_SESSIONS): sensor.sensor_schema(
+            cv.Optional(CONF_MAINTENANCE_SESSIONS): sensor.sensor_schema(
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_TOTAL_INCREASING,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:tools",
             ),
-            cv.Required(CONF_RECOVERY_RESETS): sensor.sensor_schema(
+            cv.Optional(CONF_RECOVERY_RESETS): sensor.sensor_schema(
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_TOTAL_INCREASING,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
@@ -160,58 +207,58 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(
                 CONF_PARKED_SOCKET_TIMEOUT, default="10min"
             ): cv.positive_time_period_milliseconds,
-            cv.Required(CONF_FLASH_SIZE): sensor.sensor_schema(
+            cv.Optional(CONF_FLASH_SIZE): sensor.sensor_schema(
                 device_class=DEVICE_CLASS_DATA_SIZE,
                 unit_of_measurement=UNIT_BYTES,
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_MEASUREMENT,
                 icon="mdi:memory",
             ),
-            cv.Required(CONF_TX_POWER): sensor.sensor_schema(
+            cv.Optional(CONF_TX_POWER): sensor.sensor_schema(
                 device_class=DEVICE_CLASS_SIGNAL_STRENGTH,
                 unit_of_measurement=UNIT_DECIBEL_MILLIWATT,
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_MEASUREMENT,
                 icon="mdi:access-point",
             ),
-            cv.Required(CONF_PAN_ID): sensor.sensor_schema(
+            cv.Optional(CONF_PAN_ID): sensor.sensor_schema(
                 accuracy_decimals=0,
                 icon="mdi:identifier",
             ),
-            cv.Required(CONF_CHANNEL): sensor.sensor_schema(
+            cv.Optional(CONF_CHANNEL): sensor.sensor_schema(
                 accuracy_decimals=0,
                 icon="mdi:access-point-network",
             ),
-            cv.Required(CONF_ON_NETWORK): binary_sensor.binary_sensor_schema(
+            cv.Optional(CONF_ON_NETWORK): binary_sensor.binary_sensor_schema(
                 device_class=DEVICE_CLASS_CONNECTIVITY,
             ),
-            cv.Required(CONF_FIRMWARE): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_FIRMWARE): text_sensor.text_sensor_schema(
                 icon="mdi:source-repository",
             ),
-            cv.Required(CONF_STACK): text_sensor.text_sensor_schema(icon="mdi:zigbee"),
-            cv.Required(CONF_FACTORY_IEEE): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_STACK): text_sensor.text_sensor_schema(icon="mdi:zigbee"),
+            cv.Optional(CONF_FACTORY_IEEE): text_sensor.text_sensor_schema(
                 icon="mdi:identifier",
             ),
-            cv.Required(CONF_SELF_IEEE): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_SELF_IEEE): text_sensor.text_sensor_schema(
                 icon="mdi:identifier",
             ),
-            cv.Required(CONF_PARENT_IEEE): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_PARENT_IEEE): text_sensor.text_sensor_schema(
                 icon="mdi:access-point-network",
             ),
-            cv.Required(CONF_ROLE): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_ROLE): text_sensor.text_sensor_schema(
                 icon="mdi:access-point",
             ),
-            cv.Required(CONF_EXTENDED_PAN_ID): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_EXTENDED_PAN_ID): text_sensor.text_sensor_schema(
                 icon="mdi:identifier",
             ),
-            cv.Required(CONF_HARDWARE): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_HARDWARE): text_sensor.text_sensor_schema(
                 icon="mdi:chip",
             ),
-            cv.Required(CONF_METADATA_STATUS): text_sensor.text_sensor_schema(
+            cv.Optional(CONF_METADATA_STATUS): text_sensor.text_sensor_schema(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:database-check",
             ),
-            cv.Required(
+            cv.Optional(
                 CONF_NETWORK_INFORMATION_STATUS
             ): text_sensor.text_sensor_schema(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
