@@ -33,7 +33,7 @@ and icon. Standard ESPHome entity options may override those defaults.
 | `uart_id` | Yes | — | UART connected to the Zigbee radio |
 | `usb_uart_id` | Yes | — | CH340-facing UART used by USB Bridged |
 | `reset_pin` | Yes | — | Zigbee reset output |
-| `bsl_pin` | Yes | — | Zigbee BSL/router-rejoin output |
+| `bsl_pin` | Yes | — | TI radio bootloader/configuration input control |
 | `mode_pin` | Yes | — | Hardware selector; high enables USB Direct on UZG-01 |
 | `mode_led_pin` | Yes | — | Transport-mode LED output |
 | `serial_transport` | No | Not exposed | Select entity with `TCP`, `USB Bridged`, and `USB Direct` |
@@ -89,7 +89,7 @@ Each optional parameter exposes one control:
 | --- | --- | --- |
 | `restart` | Button | Restart the TI radio |
 | `enter_bsl` | Button | Prepare the TI radio for a firmware update |
-| `router_rejoin` | Button | Allow router firmware to join or rejoin a network |
+| `router_factory_reset` | Button | Clear a compatible router's network association and start pairing |
 | `refresh_metadata` | Button | Run local Zigbee identification |
 
 `refresh_metadata` is intrusive. It runs only in TCP mode with no connected

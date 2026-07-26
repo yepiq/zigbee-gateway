@@ -111,7 +111,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   /// so buttons and HTTP handlers return immediately.
   void request_restart();
   void request_bsl();
-  void request_router_rejoin();
+  void request_router_factory_reset();
   void request_metadata_refresh();
   void request_transport_mode(ZigbeeTransportMode mode) {
     this->requested_transport_mode_ = mode;
@@ -159,7 +159,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void finish_async_restart_(bool reset_ind_seen);
   void process_async_reset_();
   void request_bsl_();
-  void request_router_rejoin_();
+  void request_router_factory_reset_();
   void request_metadata_refresh_();
   void enter_bsl_for_remote_();
   void reset_for_remote_();
@@ -301,9 +301,9 @@ class RadioBslButton : public button::Button, public Parented<ZigbeeGatewayCompo
   void press_action() override { this->parent_->request_bsl(); }
 };
 
-class RouterRejoinButton : public button::Button, public Parented<ZigbeeGatewayComponent> {
+class RouterFactoryResetButton : public button::Button, public Parented<ZigbeeGatewayComponent> {
  protected:
-  void press_action() override { this->parent_->request_router_rejoin(); }
+  void press_action() override { this->parent_->request_router_factory_reset(); }
 };
 
 class RadioMetadataRefreshButton : public button::Button, public Parented<ZigbeeGatewayComponent> {

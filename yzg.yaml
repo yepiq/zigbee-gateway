@@ -151,8 +151,8 @@ zigbee_gateway:
     name: Restart Zigbee
   enter_bsl:
     name: Zigbee BSL Mode
-  router_rejoin:
-    name: Zigbee Router Rejoin
+  router_factory_reset:
+    name: Factory Reset Zigbee Router
   refresh_metadata:
     name: Refresh Zigbee Information
 

@@ -847,8 +847,8 @@ void ZigbeeGatewayComponent::request_bsl() {
   this->defer("zigbee_bsl", [this]() { this->request_bsl_(); });
 }
 
-void ZigbeeGatewayComponent::request_router_rejoin() {
-  this->defer("zigbee_router_rejoin", [this]() { this->request_router_rejoin_(); });
+void ZigbeeGatewayComponent::request_router_factory_reset() {
+  this->defer("zigbee_router_factory_reset", [this]() { this->request_router_factory_reset_(); });
 }
 
 void ZigbeeGatewayComponent::request_metadata_refresh() {
@@ -1002,24 +1002,24 @@ void ZigbeeGatewayComponent::request_bsl_() {
   });
 }
 
-void ZigbeeGatewayComponent::request_router_rejoin_() {
+void ZigbeeGatewayComponent::request_router_factory_reset_() {
   if (this->operation_active_) {
-    ESP_LOGW(TAG, "Another Zigbee operation is active; router rejoin request ignored.");
+    ESP_LOGW(TAG, "Another Zigbee operation is active; router factory reset request ignored.");
     return;
   }
   if (this->role_ != "Router" && this->role_ != "Unknown") {
-    ESP_LOGI(TAG, "Router rejoin is only applicable in Router role; skipping.");
+    ESP_LOGI(TAG, "Router factory reset is only applicable in Router role; skipping.");
     return;
   }
 
-  ESP_LOGI(TAG, "Put Zigbee in router rejoin mode.");
+  ESP_LOGI(TAG, "Requesting Zigbee router factory reset and pairing mode.");
   this->operation_active_ = true;
   this->bsl_pin_->digital_write(true);
-  this->set_timeout("zigbee_rejoin_release", 250, [this]() {
+  this->set_timeout("zigbee_router_factory_reset_release", 250, [this]() {
     this->bsl_pin_->digital_write(false);
-    this->set_timeout("zigbee_rejoin_settle", 500, [this]() {
+    this->set_timeout("zigbee_router_factory_reset_settle", 500, [this]() {
       this->operation_active_ = false;
-      ESP_LOGI(TAG, "Zigbee router rejoin pulse complete.");
+      ESP_LOGI(TAG, "Zigbee router factory reset pulse complete.");
     });
   });
 }

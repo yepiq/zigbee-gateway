@@ -104,7 +104,7 @@ YZG exposes these controls in Home Assistant and its web interface:
 | **Zigbee Serial Transport** | Chooses TCP, USB Bridged, or USB Direct |
 | **Restart Zigbee** | Restarts the TI Zigbee radio without restarting the ESP32 |
 | **Zigbee BSL Mode** | Prepares the TI radio for a firmware update |
-| **Zigbee Router Rejoin** | Allows router firmware to join or rejoin a Zigbee network |
+| **Factory Reset Zigbee Router** | Clears a compatible router's network association and starts pairing |
 | **Refresh Zigbee Information** | Updates the displayed radio and Zigbee network information |
 
 Refreshing Zigbee information temporarily uses the radio connection. YZG allows

@@ -609,7 +609,7 @@ category.
   commission it into another Zigbee network.
 - Expected: The gateway does not assume the transferred image type; cached role
   remains last-known during transfer, is replaced only after applicable normal
-  protocol traffic identifies it, and router rejoin control works.
+  protocol traffic identifies it, and the router factory-reset control works.
 
 ### FW-04 — Router-to-coordinator conversion
 
@@ -660,13 +660,15 @@ category.
   address/port.
 - Expected: Port, radio type, and baud-rate metadata match the active server.
 
-### HW-05 — Router rejoin pulse
+### HW-05 — Router factory-reset pulse
 
 - Status: `NOT RUN`
-- Procedure: With known router firmware, invoke Router Rejoin and recommission
-  the radio.
-- Expected: BSL/rejoin pin timing produces pairing behavior without a competing
-  TCP UART owner.
+- Procedure: With known compatible router firmware, invoke Factory Reset
+  Zigbee Router, enable joining on the coordinator, and recommission the radio.
+  Repeat while the radio role is known to be Coordinator.
+- Expected: The router leaves its former network, clears its saved network
+  association, restarts, and enters pairing. In Coordinator role the component
+  skips the operation and does not pulse the configuration pin.
 
 ## References
 

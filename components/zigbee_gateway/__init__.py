@@ -60,7 +60,7 @@ CONF_NETWORK_INFORMATION_STATUS = "network_information_status"
 
 CONF_RESTART = "restart"
 CONF_ENTER_BSL = "enter_bsl"
-CONF_ROUTER_REJOIN = "router_rejoin"
+CONF_ROUTER_FACTORY_RESET = "router_factory_reset"
 CONF_REFRESH_METADATA = "refresh_metadata"
 
 zigbee_gateway_ns = cg.esphome_ns.namespace("zigbee_gateway")
@@ -73,8 +73,10 @@ RadioRestartButton = zigbee_gateway_ns.class_(
 RadioBslButton = zigbee_gateway_ns.class_(
     "RadioBslButton", button.Button, cg.Parented.template(ZigbeeGatewayComponent)
 )
-RouterRejoinButton = zigbee_gateway_ns.class_(
-    "RouterRejoinButton", button.Button, cg.Parented.template(ZigbeeGatewayComponent)
+RouterFactoryResetButton = zigbee_gateway_ns.class_(
+    "RouterFactoryResetButton",
+    button.Button,
+    cg.Parented.template(ZigbeeGatewayComponent),
 )
 RadioMetadataRefreshButton = zigbee_gateway_ns.class_(
     "RadioMetadataRefreshButton",
@@ -228,10 +230,10 @@ CONFIG_SCHEMA = cv.All(
                 entity_category=ENTITY_CATEGORY_CONFIG,
                 icon="mdi:cellphone-arrow-down",
             ),
-            cv.Optional(CONF_ROUTER_REJOIN): button.button_schema(
-                RouterRejoinButton,
+            cv.Optional(CONF_ROUTER_FACTORY_RESET): button.button_schema(
+                RouterFactoryResetButton,
                 entity_category=ENTITY_CATEGORY_CONFIG,
-                icon="mdi:access-point-plus",
+                icon="mdi:delete-restore",
             ),
             cv.Optional(CONF_REFRESH_METADATA): button.button_schema(
                 RadioMetadataRefreshButton,
@@ -328,7 +330,7 @@ async def to_code(config):
     for key in (
         CONF_RESTART,
         CONF_ENTER_BSL,
-        CONF_ROUTER_REJOIN,
+        CONF_ROUTER_FACTORY_RESET,
         CONF_REFRESH_METADATA,
     ):
         if key not in config:
