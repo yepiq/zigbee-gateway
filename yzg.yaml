@@ -1,37 +1,41 @@
 substitutions:
+  # Device identity
   name: yzg
   friendly_name: Yepiq Zigbee Gateway
 
+  # External component source
   zigbee_gateway_source: components
   zigbee_gateway_refresh: 0s
 
+  # TCP serial server
   tcp_serial_port: 6638
   tcp_pending_socket_timeout_ms: 30000
   tcp_parked_socket_timeout_ms: 600000
 
+  # Physical mode button and USB Direct selector
   button_pin: GPIO35
   button_inverted: true
   button_strapping: false
-
   mode_pin: GPIO33
   mode_strapping: false
 
+  # TI Zigbee radio control
   zRST_pin: GPIO16
   zRST_strapping: false
   zRST_inverted: true
-
   zBSL_pin: GPIO32
   zBSL_strapping: false
   zBSL_inverted: true
 
+  # Front-panel indicators
   led_red_pin: GPIO12
   led_red_strapping: true
   led_red_inverted: false
-
   led_blue_pin: GPIO14
   led_blue_strapping: false
   led_blue_inverted: false
 
+  # Radio-facing and USB-facing serial ports
   uart_rx_pin: GPIO36
   uart_tx_pin: GPIO04
   uart_baud_rate: 115200
@@ -39,6 +43,7 @@ substitutions:
   usb_uart_rx_pin: GPIO03
   usb_uart_tx_pin: GPIO01
 
+  # Ethernet PHY
   lan_mdc_pin: GPIO23
   lan_mdc_strapping: false
   lan_mdio_pin: GPIO18
@@ -65,211 +70,20 @@ esp32:
       CONFIG_FREERTOS_UNICORE: y
       CONFIG_ESP_TASK_WDT_TIMEOUT_S: '10'
 
-### External components
+# External component
 external_components:
   - source: ${zigbee_gateway_source}
     refresh: ${zigbee_gateway_refresh}
     components: [zigbee_gateway]
 
-api:
-  # This Ethernet gateway must remain operational without an API client.
-  reboot_timeout: 0s
-
+# Logging
 logger:
   level: DEBUG
   # Do not enable serial logging: UART0 is the USB Bridged data endpoint.
   # Logger output would be injected into, and corrupt, the Zigbee serial stream.
   baud_rate: 0
 
-ota:
-  platform: esphome
-
-web_server:
-  version: 3
-  id: websrv
-
-dashboard_import:
-  package_import_url: github://yepiq/zigbee-gateway/yzg-package.yaml@main
-  import_full_config: false
-
-### Zigbee radio
-zigbee_gateway:
-  id: zigbee_gateway_component
-  uart_id: uart_bus
-  usb_uart_id: usb_uart_bus
-  ip_address: mcu_ip_address
-  tcp_port: ${tcp_serial_port}
-  pending_socket_timeout: ${tcp_pending_socket_timeout_ms}ms
-  parked_socket_timeout: ${tcp_parked_socket_timeout_ms}ms
-
-  socket_connected:
-    name: Socket Status
-    id: socket_status
-    entity_category: diagnostic
-  connection_count:
-    name: Socket Connections
-    id: socket_connections
-    entity_category: diagnostic
-  transport_state:
-    name: Zigbee TCP State
-  pending_socket:
-    name: Zigbee TCP Pending Socket
-  parked_socket:
-    name: Zigbee TCP Parked Socket
-  last_transport_event:
-    name: Zigbee TCP Last Event
-  rejected_connections:
-    name: Zigbee TCP Rejected Connections
-  pending_timeouts:
-    name: Zigbee TCP Pending Timeouts
-  maintenance_sessions:
-    name: Zigbee TCP Maintenance Sessions
-  recovery_resets:
-    name: Zigbee TCP Recovery Resets
-
-  reset_pin:
-    number: ${zRST_pin}
-    inverted: ${zRST_inverted}
-    ignore_strapping_warning: ${zRST_strapping}
-  bsl_pin:
-    number: ${zBSL_pin}
-    inverted: ${zBSL_inverted}
-    ignore_strapping_warning: ${zBSL_strapping}
-  mode_pin:
-    number: ${mode_pin}
-    ignore_strapping_warning: ${mode_strapping}
-  mode_led_pin:
-    number: ${led_red_pin}
-    inverted: ${led_red_inverted}
-    ignore_strapping_warning: ${led_red_strapping}
-
-  serial_transport:
-    name: Zigbee Serial Transport
-    id: select_mode
-
-  restart:
-    name: Restart Zigbee
-  enter_bsl:
-    name: Zigbee BSL Mode
-  router_factory_reset:
-    name: Factory Reset Zigbee Router
-  refresh_metadata:
-    name: Refresh Zigbee Information
-
-  flash_size:
-    name: Zigbee Flash Size
-  tx_power:
-    name: Zigbee TX Power
-  pan_id:
-    name: Zigbee PAN ID
-  channel:
-    name: Zigbee Channel
-  on_network:
-    name: Zigbee Network Status
-  firmware:
-    name: Zigbee Firmware
-  stack:
-    name: Zigbee Stack
-  factory_ieee:
-    name: Zigbee Factory IEEE Address
-  self_ieee:
-    name: Zigbee Active IEEE Address
-  parent_ieee:
-    name: Zigbee Parent IEEE Address
-  role:
-    name: Zigbee Role
-  extended_pan_id:
-    name: Zigbee Extended PAN ID
-  hardware:
-    name: Zigbee Hardware
-  metadata_status:
-    name: Zigbee Metadata Status
-  network_information_status:
-    name: Zigbee Network Information Status
-
-### CONTROL SETTINGS
-
-button:
-  ### ESP32 Restart
-  - platform: restart
-    name: Restart ESP32
-    id: restart_esp32
-    entity_category: config
-
-binary_sensor:
-  ### Status of physical button
-  - platform: gpio
-    name: Mode Button
-    id: mode_button
-    pin:
-      number: ${button_pin}
-      mode: INPUT
-      inverted: ${button_inverted}
-      ignore_strapping_warning: ${button_strapping}
-    entity_category: diagnostic
-    on_press:
-      then:
-        - select.next: select_mode
-
-sensor:
-  - platform: uptime
-    id: uptime_s
-    update_interval: 60s
-
-switch:
-  ### BLUE LED - Power Indicator
-  - platform: gpio
-    name: Power LED (BLUE)
-    id: led_blue
-    internal: true
-    pin:
-      number: ${led_blue_pin}
-      ignore_strapping_warning: ${led_blue_strapping}
-      inverted: ${led_blue_inverted}
-    restore_mode: ALWAYS_ON
-
-text_sensor:
-  - platform: ethernet_info
-    ip_address:
-      name: IP Address
-      id: mcu_ip_address
-      entity_category: diagnostic
-      icon: mdi:ip-network
-    mac_address:
-      name: MAC Address
-      id: mcu_mac_address
-      entity_category: diagnostic
-      disabled_by_default: true
-      icon: mdi:lan
-
-### UART Settings
-uart:
-  # Define the USB-facing port first so it receives ESP32 UART0 after the
-  # serial logger has released that controller with baud_rate: 0.
-  - id: usb_uart_bus
-    rx_pin: ${usb_uart_rx_pin}
-    tx_pin: ${usb_uart_tx_pin}
-    baud_rate: ${uart_baud_rate}
-    rx_buffer_size: ${uart_rx_buffer_size}
-  - id: uart_bus
-    rx_pin: ${uart_rx_pin}
-    tx_pin: ${uart_tx_pin}
-    baud_rate: ${uart_baud_rate}
-    rx_buffer_size: ${uart_rx_buffer_size}
-### Auto Discovery via mDNS
-mdns:
-  services:
-    - service: '_uzg-01'
-      protocol: '_tcp'
-      port: ${tcp_serial_port}
-      txt:
-        version: 1.0
-        name: UZG-01
-        radio_type: znp
-        baud_rate: ${uart_baud_rate}
-        data_flow_control: software
-
-### Ethernet Settings
+# Ethernet
 ethernet:
   type: LAN8720
   mdc_pin:
@@ -288,7 +102,269 @@ ethernet:
     number: ${lan_power_pin}
     ignore_strapping_warning: ${lan_power_strapping}
 
-### Home Assistant Time
+# Management interfaces
+api:
+  # This Ethernet gateway must remain operational without an API client.
+  reboot_timeout: 0s
+
+ota:
+  platform: esphome
+
+web_server:
+  version: 3
+  id: websrv
+
+dashboard_import:
+  package_import_url: github://yepiq/zigbee-gateway/yzg-package.yaml@main
+  import_full_config: false
+
+# Network discovery
+mdns:
+  services:
+    - service: '_uzg-01'
+      protocol: '_tcp'
+      port: ${tcp_serial_port}
+      txt:
+        version: 1.0
+        name: UZG-01
+        radio_type: znp
+        baud_rate: ${uart_baud_rate}
+        data_flow_control: software
+
+# Home Assistant time
 time:
   - platform: homeassistant
     id: ha_time
+
+# Serial interfaces
+uart:
+  # Define the USB-facing port first so it receives ESP32 UART0 after the
+  # serial logger has released that controller with baud_rate: 0.
+  - id: usb_uart_bus
+    rx_pin: ${usb_uart_rx_pin}
+    tx_pin: ${usb_uart_tx_pin}
+    baud_rate: ${uart_baud_rate}
+    rx_buffer_size: ${uart_rx_buffer_size}
+
+  - id: uart_bus
+    rx_pin: ${uart_rx_pin}
+    tx_pin: ${uart_tx_pin}
+    baud_rate: ${uart_baud_rate}
+    rx_buffer_size: ${uart_rx_buffer_size}
+
+# Zigbee gateway
+zigbee_gateway:
+  id: zigbee_gateway_component
+
+  # Serial paths and TCP server policy
+  uart_id: uart_bus
+  usb_uart_id: usb_uart_bus
+  ip_address: mcu_ip_address
+  tcp_port: ${tcp_serial_port}
+  pending_socket_timeout: ${tcp_pending_socket_timeout_ms}ms
+  parked_socket_timeout: ${tcp_parked_socket_timeout_ms}ms
+
+  # Radio control and transport hardware
+  reset_pin:
+    number: ${zRST_pin}
+    inverted: ${zRST_inverted}
+    ignore_strapping_warning: ${zRST_strapping}
+  bsl_pin:
+    number: ${zBSL_pin}
+    inverted: ${zBSL_inverted}
+    ignore_strapping_warning: ${zBSL_strapping}
+  mode_pin:
+    number: ${mode_pin}
+    ignore_strapping_warning: ${mode_strapping}
+  mode_led_pin:
+    number: ${led_red_pin}
+    inverted: ${led_red_inverted}
+    ignore_strapping_warning: ${led_red_strapping}
+
+  # User controls
+
+  # Chooses TCP, an ESP32-managed USB bridge, or the direct USB hardware path.
+  serial_transport:
+    name: Zigbee Serial Transport
+    id: select_mode
+
+  # Restarts the TI radio without restarting the ESP32.
+  restart:
+    name: Restart Zigbee
+
+  # Prepares the TI radio bootloader for a firmware update.
+  enter_bsl:
+    name: Zigbee BSL Mode
+
+  # Clears a compatible router's network association and starts pairing again.
+  router_factory_reset:
+    name: Factory Reset Zigbee Router
+
+  # Identifies the radio while TCP is idle and refreshes its cached information.
+  refresh_metadata:
+    name: Refresh Zigbee Information
+
+  # Radio identity
+
+  # Detected TI radio family and variant.
+  hardware:
+    name: Zigbee Hardware
+
+  # Detected flash capacity of the TI radio.
+  flash_size:
+    name: Zigbee Flash Size
+
+  # ZNP firmware version observed from the running image.
+  firmware:
+    name: Zigbee Firmware
+
+  # Z-Stack version observed from the running image.
+  stack:
+    name: Zigbee Stack
+
+  # Permanent IEEE address programmed at the factory.
+  factory_ieee:
+    name: Zigbee Factory IEEE Address
+
+  # IEEE address currently used by the running Zigbee firmware.
+  self_ieee:
+    name: Zigbee Active IEEE Address
+
+  # Current radio role reported or recovered from the TI radio.
+  role:
+    name: Zigbee Role
+
+  # Zigbee network information
+
+  # Last transmit-power setting observed in ordinary ZNP traffic.
+  tx_power:
+    name: Zigbee TX Power
+
+  # Last observed Zigbee network identifier.
+  pan_id:
+    name: Zigbee PAN ID
+
+  # Last observed Zigbee radio channel.
+  channel:
+    name: Zigbee Channel
+
+  # Whether the radio was last observed as joined to a Zigbee network.
+  on_network:
+    name: Zigbee Network Status
+
+  # IEEE address of the router's parent or the network coordinator.
+  parent_ieee:
+    name: Zigbee Parent IEEE Address
+
+  # Last observed extended identifier of the Zigbee network.
+  extended_pan_id:
+    name: Zigbee Extended PAN ID
+
+  # Information provenance
+
+  # Explains whether radio identity is verified, observed, cached, or unavailable.
+  metadata_status:
+    name: Zigbee Metadata Status
+
+  # Explains whether the network snapshot is observed, cached, or unavailable.
+  network_information_status:
+    name: Zigbee Network Information Status
+
+  # TCP diagnostics
+
+  # True while any active, pending, or parked TCP socket is retained.
+  socket_connected:
+    name: Socket Status
+    id: socket_status
+
+  # Number of active, pending, and parked TCP sockets currently retained.
+  connection_count:
+    name: Socket Connections
+    id: socket_connections
+
+  # Current TCP state: idle, provisional, normal, or maintenance.
+  transport_state:
+    name: Zigbee TCP State
+
+  # A second TCP client is waiting to request a maintenance takeover.
+  pending_socket:
+    name: Zigbee TCP Pending Socket
+
+  # The normal TCP client is quarantined while maintenance owns the radio.
+  parked_socket:
+    name: Zigbee TCP Parked Socket
+
+  # Most recent transition made by the TCP ownership state machine.
+  last_transport_event:
+    name: Zigbee TCP Last Event
+
+  # TCP connections rejected since the ESP32 started.
+  rejected_connections:
+    name: Zigbee TCP Rejected Connections
+
+  # Pending maintenance candidates that expired before takeover.
+  pending_timeouts:
+    name: Zigbee TCP Pending Timeouts
+
+  # Firmware-maintenance sessions started since the ESP32 booted.
+  maintenance_sessions:
+    name: Zigbee TCP Maintenance Sessions
+
+  # Radio recovery resets performed after interrupted maintenance.
+  recovery_resets:
+    name: Zigbee TCP Recovery Resets
+
+# Local controls and indicators
+button:
+  # Restarts the ESP32 and all gateway services.
+  - platform: restart
+    name: Restart ESP32
+    id: restart_esp32
+    entity_category: config
+
+binary_sensor:
+  # Cycles the Zigbee serial transport when the front-panel button is pressed.
+  - platform: gpio
+    name: Mode Button
+    id: mode_button
+    pin:
+      number: ${button_pin}
+      mode: INPUT
+      inverted: ${button_inverted}
+      ignore_strapping_warning: ${button_strapping}
+    entity_category: diagnostic
+    on_press:
+      then:
+        - select.next: select_mode
+
+switch:
+  # Keeps the blue front-panel power indicator illuminated.
+  - platform: gpio
+    name: Power LED (BLUE)
+    id: led_blue
+    internal: true
+    pin:
+      number: ${led_blue_pin}
+      ignore_strapping_warning: ${led_blue_strapping}
+      inverted: ${led_blue_inverted}
+    restore_mode: ALWAYS_ON
+
+# Standard diagnostics
+sensor:
+  - platform: uptime
+    id: uptime_s
+    update_interval: 60s
+
+text_sensor:
+  - platform: ethernet_info
+    ip_address:
+      name: IP Address
+      id: mcu_ip_address
+      entity_category: diagnostic
+      icon: mdi:ip-network
+    mac_address:
+      name: MAC Address
+      id: mcu_mac_address
+      entity_category: diagnostic
+      disabled_by_default: true
+      icon: mdi:lan
