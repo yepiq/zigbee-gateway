@@ -4,7 +4,6 @@ from esphome.components import binary_sensor, button, select, sensor, text_senso
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ID,
-    CONF_NAME,
     CONF_RESET_PIN,
     DEVICE_CLASS_CONNECTIVITY,
     DEVICE_CLASS_DATA_SIZE,
@@ -64,51 +63,6 @@ CONF_ENTER_BSL = "enter_bsl"
 CONF_ROUTER_REJOIN = "router_rejoin"
 CONF_REFRESH_METADATA = "refresh_metadata"
 
-ENTITY_DEFAULT_NAMES = {
-    CONF_SERIAL_TRANSPORT: "Zigbee Serial Transport",
-    CONF_SOCKET_CONNECTED: "Socket Status",
-    CONF_CONNECTION_COUNT: "Socket Connections",
-    CONF_TRANSPORT_STATE: "Zigbee TCP State",
-    CONF_PENDING_SOCKET: "Zigbee TCP Pending Socket",
-    CONF_PARKED_SOCKET: "Zigbee TCP Parked Socket",
-    CONF_LAST_TRANSPORT_EVENT: "Zigbee TCP Last Event",
-    CONF_REJECTED_CONNECTIONS: "Zigbee TCP Rejected Connections",
-    CONF_PENDING_TIMEOUTS: "Zigbee TCP Pending Timeouts",
-    CONF_MAINTENANCE_SESSIONS: "Zigbee TCP Maintenance Sessions",
-    CONF_RECOVERY_RESETS: "Zigbee TCP Recovery Resets",
-    CONF_FLASH_SIZE: "Zigbee Flash Size",
-    CONF_TX_POWER: "Zigbee TX Power",
-    CONF_PAN_ID: "Zigbee PAN ID",
-    CONF_CHANNEL: "Zigbee Channel",
-    CONF_ON_NETWORK: "Zigbee Network Status",
-    CONF_FIRMWARE: "Zigbee Firmware",
-    CONF_STACK: "Zigbee Stack",
-    CONF_FACTORY_IEEE: "Zigbee Factory IEEE Address",
-    CONF_SELF_IEEE: "Zigbee Active IEEE Address",
-    CONF_PARENT_IEEE: "Zigbee Parent IEEE Address",
-    CONF_ROLE: "Zigbee Role",
-    CONF_EXTENDED_PAN_ID: "Zigbee Extended PAN ID",
-    CONF_HARDWARE: "Zigbee Hardware",
-    CONF_METADATA_STATUS: "Zigbee Metadata Status",
-    CONF_NETWORK_INFORMATION_STATUS: "Zigbee Network Information Status",
-    CONF_RESTART: "Restart Zigbee",
-    CONF_ENTER_BSL: "Zigbee BSL Mode",
-    CONF_ROUTER_REJOIN: "Zigbee Router Rejoin",
-    CONF_REFRESH_METADATA: "Refresh Zigbee Information",
-}
-
-
-def apply_entity_defaults(config):
-    config = dict(config)
-    for key, name in ENTITY_DEFAULT_NAMES.items():
-        entity_config = dict(config.get(key, {}))
-        entity_config.setdefault(CONF_NAME, name)
-        config[key] = entity_config
-
-    config[CONF_SERIAL_TRANSPORT].setdefault(CONF_ID, "select_mode")
-    return config
-
-
 zigbee_gateway_ns = cg.esphome_ns.namespace("zigbee_gateway")
 ZigbeeGatewayComponent = zigbee_gateway_ns.class_(
     "ZigbeeGatewayComponent", cg.Component, uart.UARTDevice
@@ -135,7 +89,6 @@ ZigbeeTransportSelect = zigbee_gateway_ns.class_(
 )
 
 CONFIG_SCHEMA = cv.All(
-    apply_entity_defaults,
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(ZigbeeGatewayComponent),
@@ -308,23 +261,26 @@ async def to_code(config):
     )
     cg.add(var.set_usb_uart(await cg.get_variable(config[CONF_USB_UART_ID])))
 
-    transport = await select.new_select(
-        config[CONF_SERIAL_TRANSPORT],
-        options=["TCP", "USB Bridged", "USB Direct"],
-    )
-    await cg.register_component(transport, config[CONF_SERIAL_TRANSPORT])
-    await cg.register_parented(transport, config[CONF_ID])
+    if CONF_SERIAL_TRANSPORT in config:
+        transport = await select.new_select(
+            config[CONF_SERIAL_TRANSPORT],
+            options=["TCP", "USB Bridged", "USB Direct"],
+        )
+        await cg.register_component(transport, config[CONF_SERIAL_TRANSPORT])
+        await cg.register_parented(transport, config[CONF_ID])
 
-    socket_connected = await binary_sensor.new_binary_sensor(
-        config[CONF_SOCKET_CONNECTED]
-    )
-    cg.add(var.set_socket_connected_binary_sensor(socket_connected))
-    connection_count = await sensor.new_sensor(config[CONF_CONNECTION_COUNT])
-    cg.add(var.set_connection_count_sensor(connection_count))
-    pending_socket = await binary_sensor.new_binary_sensor(config[CONF_PENDING_SOCKET])
-    cg.add(var.set_pending_socket_binary_sensor(pending_socket))
-    parked_socket = await binary_sensor.new_binary_sensor(config[CONF_PARKED_SOCKET])
-    cg.add(var.set_parked_socket_binary_sensor(parked_socket))
+    binary_sensor_setters = {
+        CONF_SOCKET_CONNECTED: "set_socket_connected_binary_sensor",
+        CONF_PENDING_SOCKET: "set_pending_socket_binary_sensor",
+        CONF_PARKED_SOCKET: "set_parked_socket_binary_sensor",
+        CONF_ON_NETWORK: "set_on_network_binary_sensor",
+    }
+    for key, setter in binary_sensor_setters.items():
+        if key not in config:
+            continue
+        sens = await binary_sensor.new_binary_sensor(config[key])
+        cg.add(getattr(var, setter)(sens))
+
     if CONF_IP_ADDRESS in config:
         cg.add(
             var.set_ip_address_text_sensor(
@@ -333,6 +289,7 @@ async def to_code(config):
         )
 
     sensor_setters = {
+        CONF_CONNECTION_COUNT: "set_connection_count_sensor",
         CONF_FLASH_SIZE: "set_flash_size_sensor",
         CONF_TX_POWER: "set_tx_power_sensor",
         CONF_PAN_ID: "set_pan_id_sensor",
@@ -343,11 +300,10 @@ async def to_code(config):
         CONF_RECOVERY_RESETS: "set_recovery_resets_sensor",
     }
     for key, setter in sensor_setters.items():
+        if key not in config:
+            continue
         sens = await sensor.new_sensor(config[key])
         cg.add(getattr(var, setter)(sens))
-
-    on_network = await binary_sensor.new_binary_sensor(config[CONF_ON_NETWORK])
-    cg.add(var.set_on_network_binary_sensor(on_network))
 
     text_sensor_setters = {
         CONF_FIRMWARE: "set_firmware_text_sensor",
@@ -364,6 +320,8 @@ async def to_code(config):
         CONF_LAST_TRANSPORT_EVENT: "set_last_transport_event_text_sensor",
     }
     for key, setter in text_sensor_setters.items():
+        if key not in config:
+            continue
         sens = await text_sensor.new_text_sensor(config[key])
         cg.add(getattr(var, setter)(sens))
 

@@ -1,6 +1,8 @@
 #pragma once
 
-#include "esphome.h"
+#include "esphome/core/application.h"
+#include "esphome/core/hal.h"
+#include "esphome/core/log.h"
 #include "zigbee_serial.h"
 
 using esphome::App;
