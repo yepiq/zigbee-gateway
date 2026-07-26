@@ -1,0 +1,6 @@
+# Remote package entry point for ESPHome Device Builder.
+substitutions:
+  zigbee_gateway_source: github://yepiq/zigbee-gateway@main
+
+packages:
+  yzg: github://yepiq/zigbee-gateway/yzg.yaml@main

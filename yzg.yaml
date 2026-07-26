@@ -2,6 +2,9 @@ substitutions:
   name: yzg
   friendly_name: Yepiq Zigbee Gateway
 
+  zigbee_gateway_source: components
+  zigbee_gateway_refresh: 0s
+
   tcp_serial_port: 6638
   tcp_pending_socket_timeout_ms: 30000
   tcp_parked_socket_timeout_ms: 600000
@@ -64,7 +67,8 @@ esp32:
 
 ### External components
 external_components:
-  - source: components
+  - source: ${zigbee_gateway_source}
+    refresh: ${zigbee_gateway_refresh}
     components: [zigbee_gateway]
 
 api:
@@ -83,6 +87,10 @@ ota:
 web_server:
   version: 3
   id: websrv
+
+dashboard_import:
+  package_import_url: github://yepiq/zigbee-gateway/yzg-package.yaml@main
+  import_full_config: false
 
 ### Zigbee radio
 zigbee_gateway:
