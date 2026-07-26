@@ -352,8 +352,12 @@ switch:
 # Standard diagnostics
 sensor:
   - platform: uptime
-    id: uptime_s
-    update_interval: 60s
+    type: timestamp
+    name: Uptime
+    id: mcu_uptime
+    time_id: ha_time
+    device_class: uptime
+    entity_category: diagnostic
 
 text_sensor:
   - platform: ethernet_info
