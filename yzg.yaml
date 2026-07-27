@@ -12,6 +12,17 @@ substitutions:
   tcp_pending_socket_timeout_ms: 30000
   tcp_parked_socket_timeout_ms: 600000
 
+  # Zigbee firmware catalog and staging
+  firmware_catalog_url: https://raw.githubusercontent.com/xyzroe/XZG/zb_fws/ti/manifest.json
+  firmware_catalog_chip: CC2652P7
+  firmware_catalog_preferred_role: coordinator
+  firmware_catalog_startup_timeout: 20s
+  firmware_catalog_http_timeout: 15s
+  firmware_catalog_max_manifest_size: 64kB
+  firmware_catalog_refresh_hour: "4"
+  firmware_catalog_refresh_minute: "0"
+  firmware_catalog_refresh_days: MON-SUN
+
   # Physical mode button and USB Direct selector
   button_pin: GPIO35
   button_inverted: true
@@ -135,6 +146,14 @@ mdns:
 time:
   - platform: homeassistant
     id: ha_time
+    on_time:
+      # Check the upstream catalog on the configured local schedule.
+      - seconds: 0
+        minutes: ${firmware_catalog_refresh_minute}
+        hours: ${firmware_catalog_refresh_hour}
+        days_of_week: ${firmware_catalog_refresh_days}
+        then:
+          - lambda: id(zigbee_firmware_manager).request_refresh(false);
 
 # Serial interfaces
 uart:
@@ -180,6 +199,53 @@ zigbee_gateway:
     number: ${led_red_pin}
     inverted: ${led_red_inverted}
     ignore_strapping_warning: ${led_red_strapping}
+
+  # Firmware catalog, persistent target, and staged update simulation
+  firmware_update:
+    id: zigbee_firmware_manager
+    manifest_url: ${firmware_catalog_url}
+    chip: ${firmware_catalog_chip}
+    preferred_role: ${firmware_catalog_preferred_role}
+    startup_timeout: ${firmware_catalog_startup_timeout}
+    http_timeout: ${firmware_catalog_http_timeout}
+    max_manifest_size: ${firmware_catalog_max_manifest_size}
+
+    # Chooses the Zigbee role to install.
+    target_firmware_role:
+      name: Target Firmware Role
+
+    # Chooses a compatible build for the selected role.
+    target_firmware_version:
+      name: Target Firmware Version
+
+    # Checks the upstream catalog immediately.
+    refresh_firmware_catalog:
+      name: Refresh Firmware Catalog
+
+    # Exercises download, staging, erase, write, and verification without
+    # changing the Zigbee coprocessor.
+    simulate_firmware_update:
+      name: Simulate Zigbee Firmware Update
+
+    # Discards the downloaded image so the next simulation downloads it again.
+    invalidate_staged_firmware:
+      name: Clear Staged Zigbee Firmware
+
+    # Availability of the cached or downloaded firmware catalog.
+    firmware_catalog_status:
+      name: Firmware Catalog Status
+
+    # Current stage or final result of the simulated firmware update.
+    firmware_update_status:
+      name: Firmware Update Status
+
+    # Combined download, staging, and simulated radio-operation progress.
+    firmware_update_progress:
+      name: Firmware Update Progress
+
+    # Indicates that the most recent catalog check failed.
+    firmware_catalog_check_failed:
+      name: Firmware Catalog Check Failed
 
   # User controls
 

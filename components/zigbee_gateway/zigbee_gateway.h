@@ -15,6 +15,7 @@
 #include "esphome/core/preferences.h"
 
 #include "protocol.h"
+#include "zigbee_firmware_manager.h"
 #include "zigbee_chip_layout.h"
 #include "zigbee_metadata_cache.h"
 #include "zigbee_tcp_server.h"

@@ -94,3 +94,35 @@ Each optional parameter exposes one control:
 
 `refresh_metadata` is intrusive. It runs only in TCP mode with no connected
 socket and is rejected in both USB modes.
+
+## Firmware catalog and staged-update simulation
+
+The optional `firmware_update` block retrieves compatible images from an online
+manifest and provides persistent target selection. The current update action
+downloads and verifies the real image, but simulates the radio erase, write,
+and verification stages without changing the Zigbee radio.
+
+Enabling this block requires ESP-IDF and reserves a 768 KiB `zigbee_fw`
+partition in the ESP32 flash. Its entities are independently optional.
+
+| Parameter | Required | Default | Description |
+| --- | --- | --- | --- |
+| `id` | No | Generated | Firmware manager ID |
+| `manifest_url` | Yes | — | HTTPS URL of the XZG-compatible firmware manifest |
+| `chip` | Yes | — | TI radio model used to filter the manifest, such as `CC2652P7` |
+| `preferred_role` | No | `coordinator` | Initially selected role when no saved target exists |
+| `startup_timeout` | Yes | — | Maximum wait for the startup catalog check before allowing the native API to connect |
+| `http_timeout` | Yes | — | Timeout for each catalog or firmware HTTP request |
+| `max_manifest_size` | Yes | — | Largest manifest accepted in memory |
+
+| Entity parameter | Type | Purpose |
+| --- | --- | --- |
+| `target_firmware_role` | Select | Select coordinator or router firmware |
+| `target_firmware_version` | Select | Select an exact compatible catalog build |
+| `refresh_firmware_catalog` | Button | Check the catalog immediately |
+| `simulate_firmware_update` | Button | Download, stage, verify, and simulate installing the selected image |
+| `invalidate_staged_firmware` | Button | Discard the verified staged image |
+| `firmware_catalog_status` | Text sensor | Catalog availability and last check result |
+| `firmware_update_status` | Text sensor | Current or final update-simulation stage |
+| `firmware_update_progress` | Sensor | Combined download and simulation progress |
+| `firmware_catalog_check_failed` | Binary sensor | Whether the most recent catalog check failed |

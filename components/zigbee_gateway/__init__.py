@@ -1,12 +1,21 @@
 from esphome import pins
 import esphome.codegen as cg
-from esphome.components import binary_sensor, button, select, sensor, text_sensor, uart
+from esphome.components import (
+    binary_sensor,
+    button,
+    esp32,
+    select,
+    sensor,
+    text_sensor,
+    uart,
+)
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ID,
     CONF_RESET_PIN,
     DEVICE_CLASS_CONNECTIVITY,
     DEVICE_CLASS_DATA_SIZE,
+    DEVICE_CLASS_PROBLEM,
     DEVICE_CLASS_RESTART,
     DEVICE_CLASS_SIGNAL_STRENGTH,
     ENTITY_CATEGORY_CONFIG,
@@ -16,11 +25,21 @@ from esphome.const import (
     STATE_CLASS_TOTAL_INCREASING,
     UNIT_BYTES,
     UNIT_DECIBEL_MILLIWATT,
+    UNIT_PERCENT,
 )
+from esphome.core import CORE
 
 CODEOWNERS = ["@yepiq"]
 DEPENDENCIES = ["network", "uart"]
-AUTO_LOAD = ["binary_sensor", "button", "select", "sensor", "socket", "text_sensor"]
+AUTO_LOAD = [
+    "binary_sensor",
+    "button",
+    "json",
+    "select",
+    "sensor",
+    "socket",
+    "text_sensor",
+]
 
 CONF_SOCKET_CONNECTED = "socket_connected"
 CONF_CONNECTION_COUNT = "connection_count"
@@ -63,6 +82,23 @@ CONF_ENTER_BSL = "enter_bsl"
 CONF_ROUTER_FACTORY_RESET = "router_factory_reset"
 CONF_REFRESH_METADATA = "refresh_metadata"
 
+CONF_FIRMWARE_UPDATE = "firmware_update"
+CONF_MANIFEST_URL = "manifest_url"
+CONF_CHIP = "chip"
+CONF_PREFERRED_ROLE = "preferred_role"
+CONF_STARTUP_TIMEOUT = "startup_timeout"
+CONF_HTTP_TIMEOUT = "http_timeout"
+CONF_MAX_MANIFEST_SIZE = "max_manifest_size"
+CONF_TARGET_FIRMWARE_ROLE = "target_firmware_role"
+CONF_TARGET_FIRMWARE_VERSION = "target_firmware_version"
+CONF_REFRESH_FIRMWARE_CATALOG = "refresh_firmware_catalog"
+CONF_SIMULATE_FIRMWARE_UPDATE = "simulate_firmware_update"
+CONF_INVALIDATE_STAGED_FIRMWARE = "invalidate_staged_firmware"
+CONF_FIRMWARE_CATALOG_STATUS = "firmware_catalog_status"
+CONF_FIRMWARE_UPDATE_STATUS = "firmware_update_status"
+CONF_FIRMWARE_UPDATE_PROGRESS = "firmware_update_progress"
+CONF_FIRMWARE_CATALOG_CHECK_FAILED = "firmware_catalog_check_failed"
+
 zigbee_gateway_ns = cg.esphome_ns.namespace("zigbee_gateway")
 ZigbeeGatewayComponent = zigbee_gateway_ns.class_(
     "ZigbeeGatewayComponent", cg.Component, uart.UARTDevice
@@ -89,6 +125,95 @@ ZigbeeTransportSelect = zigbee_gateway_ns.class_(
     cg.Component,
     cg.Parented.template(ZigbeeGatewayComponent),
 )
+ZigbeeFirmwareManager = zigbee_gateway_ns.class_(
+    "ZigbeeFirmwareManager", cg.Component
+)
+FirmwareRoleSelect = zigbee_gateway_ns.class_(
+    "FirmwareRoleSelect",
+    select.Select,
+    cg.Component,
+    cg.Parented.template(ZigbeeFirmwareManager),
+)
+FirmwareVersionSelect = zigbee_gateway_ns.class_(
+    "FirmwareVersionSelect",
+    select.Select,
+    cg.Component,
+    cg.Parented.template(ZigbeeFirmwareManager),
+)
+FirmwareCatalogRefreshButton = zigbee_gateway_ns.class_(
+    "FirmwareCatalogRefreshButton",
+    button.Button,
+    cg.Parented.template(ZigbeeFirmwareManager),
+)
+FirmwareUpdateSimulationButton = zigbee_gateway_ns.class_(
+    "FirmwareUpdateSimulationButton",
+    button.Button,
+    cg.Parented.template(ZigbeeFirmwareManager),
+)
+StagedFirmwareInvalidateButton = zigbee_gateway_ns.class_(
+    "StagedFirmwareInvalidateButton",
+    button.Button,
+    cg.Parented.template(ZigbeeFirmwareManager),
+)
+
+FIRMWARE_UPDATE_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.declare_id(ZigbeeFirmwareManager),
+        cv.Required(CONF_MANIFEST_URL): cv.url,
+        cv.Required(CONF_CHIP): cv.string_strict,
+        cv.Optional(CONF_PREFERRED_ROLE, default="coordinator"): cv.string_strict,
+        cv.Required(CONF_STARTUP_TIMEOUT): cv.positive_time_period_milliseconds,
+        cv.Required(CONF_HTTP_TIMEOUT): cv.positive_time_period_milliseconds,
+        cv.Required(CONF_MAX_MANIFEST_SIZE): cv.validate_bytes,
+        cv.Optional(CONF_TARGET_FIRMWARE_ROLE): select.select_schema(
+            FirmwareRoleSelect,
+            entity_category=ENTITY_CATEGORY_CONFIG,
+            icon="mdi:family-tree",
+        ),
+        cv.Optional(CONF_TARGET_FIRMWARE_VERSION): select.select_schema(
+            FirmwareVersionSelect,
+            entity_category=ENTITY_CATEGORY_CONFIG,
+            icon="mdi:chip",
+        ),
+        cv.Optional(CONF_REFRESH_FIRMWARE_CATALOG): button.button_schema(
+            FirmwareCatalogRefreshButton,
+            entity_category=ENTITY_CATEGORY_CONFIG,
+            icon="mdi:refresh",
+        ),
+        cv.Optional(CONF_SIMULATE_FIRMWARE_UPDATE): button.button_schema(
+            FirmwareUpdateSimulationButton,
+            entity_category=ENTITY_CATEGORY_CONFIG,
+            icon="mdi:progress-wrench",
+        ),
+        cv.Optional(CONF_INVALIDATE_STAGED_FIRMWARE): button.button_schema(
+            StagedFirmwareInvalidateButton,
+            entity_category=ENTITY_CATEGORY_CONFIG,
+            icon="mdi:database-remove",
+        ),
+        cv.Optional(CONF_FIRMWARE_CATALOG_STATUS): text_sensor.text_sensor_schema(
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            icon="mdi:list-status",
+        ),
+        cv.Optional(CONF_FIRMWARE_UPDATE_STATUS): text_sensor.text_sensor_schema(
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            icon="mdi:update",
+        ),
+        cv.Optional(CONF_FIRMWARE_UPDATE_PROGRESS): sensor.sensor_schema(
+            unit_of_measurement=UNIT_PERCENT,
+            accuracy_decimals=0,
+            state_class=STATE_CLASS_MEASUREMENT,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            icon="mdi:progress-check",
+        ),
+        cv.Optional(
+            CONF_FIRMWARE_CATALOG_CHECK_FAILED
+        ): binary_sensor.binary_sensor_schema(
+            device_class=DEVICE_CLASS_PROBLEM,
+            entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            icon="mdi:cloud-alert",
+        ),
+    }
+).extend(cv.COMPONENT_SCHEMA)
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
@@ -240,6 +365,7 @@ CONFIG_SCHEMA = cv.All(
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
                 icon="mdi:refresh",
             ),
+            cv.Optional(CONF_FIRMWARE_UPDATE): FIRMWARE_UPDATE_SCHEMA,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -349,6 +475,97 @@ async def to_code(config):
             config[CONF_PARKED_SOCKET_TIMEOUT].total_milliseconds
         )
     )
+
+    if CONF_FIRMWARE_UPDATE in config:
+        firmware_config = config[CONF_FIRMWARE_UPDATE]
+        if CORE.using_arduino:
+            raise cv.Invalid("firmware_update requires the ESP-IDF framework")
+
+        firmware = cg.new_Pvariable(firmware_config[CONF_ID])
+        await cg.register_component(firmware, firmware_config)
+        cg.add(firmware.set_manifest_url(firmware_config[CONF_MANIFEST_URL]))
+        cg.add(firmware.set_chip(firmware_config[CONF_CHIP]))
+        cg.add(
+            firmware.set_preferred_role(
+                firmware_config[CONF_PREFERRED_ROLE]
+            )
+        )
+        cg.add(
+            firmware.set_startup_timeout(
+                firmware_config[CONF_STARTUP_TIMEOUT].total_milliseconds
+            )
+        )
+        cg.add(
+            firmware.set_http_timeout(
+                firmware_config[CONF_HTTP_TIMEOUT].total_milliseconds
+            )
+        )
+        cg.add(
+            firmware.set_max_manifest_size(
+                firmware_config[CONF_MAX_MANIFEST_SIZE]
+            )
+        )
+
+        firmware_selects = {
+            CONF_TARGET_FIRMWARE_ROLE: (
+                FirmwareRoleSelect,
+                "set_role_select",
+            ),
+            CONF_TARGET_FIRMWARE_VERSION: (
+                FirmwareVersionSelect,
+                "set_firmware_select",
+            ),
+        }
+        for key, (_, setter) in firmware_selects.items():
+            if key not in firmware_config:
+                continue
+            entity = await select.new_select(
+                firmware_config[key],
+                options=["Catalog unavailable"],
+            )
+            await cg.register_component(entity, firmware_config[key])
+            await cg.register_parented(entity, firmware_config[CONF_ID])
+            cg.add(getattr(firmware, setter)(entity))
+
+        firmware_buttons = (
+            CONF_REFRESH_FIRMWARE_CATALOG,
+            CONF_SIMULATE_FIRMWARE_UPDATE,
+            CONF_INVALIDATE_STAGED_FIRMWARE,
+        )
+        for key in firmware_buttons:
+            if key not in firmware_config:
+                continue
+            entity = await button.new_button(firmware_config[key])
+            await cg.register_parented(entity, firmware_config[CONF_ID])
+
+        firmware_text_sensors = {
+            CONF_FIRMWARE_CATALOG_STATUS: "set_status_text_sensor",
+            CONF_FIRMWARE_UPDATE_STATUS: "set_flash_status_text_sensor",
+        }
+        for key, setter in firmware_text_sensors.items():
+            if key not in firmware_config:
+                continue
+            entity = await text_sensor.new_text_sensor(firmware_config[key])
+            cg.add(getattr(firmware, setter)(entity))
+
+        if CONF_FIRMWARE_UPDATE_PROGRESS in firmware_config:
+            entity = await sensor.new_sensor(
+                firmware_config[CONF_FIRMWARE_UPDATE_PROGRESS]
+            )
+            cg.add(firmware.set_flash_progress_sensor(entity))
+
+        if CONF_FIRMWARE_CATALOG_CHECK_FAILED in firmware_config:
+            entity = await binary_sensor.new_binary_sensor(
+                firmware_config[CONF_FIRMWARE_CATALOG_CHECK_FAILED]
+            )
+            cg.add(firmware.set_catalog_check_failed_binary_sensor(entity))
+
+        esp32.include_builtin_idf_component("esp_http_client")
+        esp32.include_builtin_idf_component("esp_partition")
+        esp32.add_partition("zigbee_fw", 0x40, 0x00, 0x0C0000)
+        esp32.add_idf_sdkconfig_option(
+            "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE", True
+        )
 
     # UART debug callbacks are a passive tap. Reads and writes are exclusively
     # gated by the component's ZigbeeSerialInterface.

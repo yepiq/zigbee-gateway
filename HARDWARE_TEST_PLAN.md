@@ -585,6 +585,151 @@ category.
 
 ## Radio firmware and role changes
 
+### STAGE-01 — Real image staging and simulated radio update
+
+- Status: `NOT RUN`
+- Procedure: On the UZG-01, select one coordinator image and press **Simulate
+  Zigbee Firmware Update** while capturing logs.
+- Expected: The compatible raw image is downloaded directly into the 768 KiB
+  `zigbee_fw` partition, read back with the same SHA-256, and marked ready.
+  Simulated erase, write, and verification remain cooperative and consume the
+  exact staged bytes. No radio UART bytes or radio control-pin changes occur,
+  and progress reaches 100%.
+
+### STAGE-02 — Interrupted download remains invalid
+
+- Status: `NOT RUN`
+- Procedure: Stage one image successfully, make its upstream freshness check
+  return HTTP 200, then remove power during the replacement download and
+  reboot.
+- Expected: The previous staging header was invalidated before replacement
+  bytes were downloaded. Boot reports no verified staged image, and neither
+  the old nor incomplete new payload can be used for a later radio update.
+
+### STAGE-03 — Completed staged image survives reboot
+
+- Status: `NOT RUN`
+- Procedure: Complete STAGE-01, reboot without starting another download, and
+  retain the startup log.
+- Expected: Boot reports the staged role, version, filename, image size, and
+  ETag and SHA-256 from the verified header. The catalog remains limited to
+  Zigbee coordinator and router images.
+
+### STAGE-04 — Update-path responsiveness
+
+- Status: `NOT RUN`
+- Procedure: During staging and every simulated radio phase, repeatedly read
+  native API entities and capture watchdog/component-blocking warnings.
+- Expected: Home Assistant and logging remain responsive. Work advances in
+  bounded chunks without an ESPHome watchdog reset. Repeat this test with
+  stricter timing expectations when simulated UART operations are replaced by
+  slower acknowledged BSL commands.
+
+### STAGE-05 — Current staged image is reused
+
+- Status: `NOT RUN`
+- Procedure: Complete STAGE-01, keep the same role and version selected, then
+  run the simulation again with normal Internet access.
+- Expected: A conditional HEAD request returns 304. The staged payload is read
+  back and its SHA-256 verified before the simulated radio operations start;
+  the firmware body is not downloaded again.
+
+### STAGE-06 — Freshness-check failure falls back to verified staging
+
+- Status: `NOT RUN`
+- Procedure: Stage a valid image, block or interrupt the firmware HEAD request,
+  and run the same selection again.
+- Expected: The request failure is logged as a warning. The complete staged
+  payload is SHA-256 verified and used without a firmware download.
+
+### STAGE-07 — Selection changes preserve unrelated staging
+
+- Status: `NOT RUN`
+- Procedure: Stage one coordinator image, change the version and role selects
+  several times without running an update, then return to the staged selection
+  and run it.
+- Expected: Select changes do not erase or invalidate the staged header. The
+  original exact role, version, and filename still match and follow the normal
+  conditional reuse path.
+
+### STAGE-08 — Manual staged-image invalidation
+
+- Status: `NOT RUN`
+- Procedure: Stage an image, press **Clear Staged Zigbee Firmware**, reboot,
+  and run the same selection again.
+- Expected: Only the 4 KiB staging header is erased. Boot reports no verified
+  staged image and the next run downloads the firmware again; stale payload
+  bytes are never treated as valid.
+
+### STAGE-09 — Corrupt staged payload fails closed
+
+- Status: `NOT RUN`
+- Procedure: Stage an image, alter one payload byte with a development build,
+  then run the same selection. Repeat once with Internet access and once
+  without it.
+- Expected: Full readback SHA-256 rejects the payload and invalidates its
+  header. Online, a fresh download is attempted; offline, the update fails
+  without entering simulated radio erase or write.
+
+### CATALOG-01 — Boot refresh precedes the first HA connection
+
+- Status: `NOT RUN`
+- Procedure: Reboot once with a cached catalog and once after clearing stored
+  catalog data. Capture logs through the first native API connection.
+- Expected: After the network connects, each boot performs one conditional
+  catalog refresh. HA is released immediately after a successful 200/304 result or
+  after the configured startup timeout; a missing cache remains unavailable
+  if the refresh fails.
+
+### CATALOG-02 — Scheduled and manual catalog checks
+
+- Status: `NOT RUN`
+- Procedure: Set the YAML refresh time a few minutes ahead, confirm HA time is
+  valid, observe the scheduled check, then press Refresh Firmware Catalog.
+- Expected: Both paths perform one conditional request. An unchanged catalog
+  retains the existing selects without forcing an API reconnect; changed
+  visible options cause one reconnect after the complete option list is ready.
+
+### CATALOG-03 — Catalog-check failure diagnostic
+
+- Status: `NOT RUN`
+- Procedure: Observe the entity before the first completed check, then force an
+  HTTPS or manifest-parse failure and finally restore a valid 200/304 response.
+- Expected: Firmware Catalog Check Failed starts unknown, becomes on after the
+  failed check, and returns off after the next successful check. No internal
+  retry is scheduled.
+
+### TARGET-01 — Exact target selection survives restart
+
+- Status: `NOT RUN`
+- Procedure: Select a firmware role and version, note the exact catalog
+  filename from the log, press **Restart ESP32**, and observe both selects
+  after HA reconnects.
+- Expected: The saved role, version, and exact filename are restored after the
+  catalog is available. Restarting does not download, invalidate, or otherwise
+  modify the staged firmware image.
+
+### TARGET-02 — Missing saved build is not substituted
+
+- Status: `NOT RUN`
+- Procedure: Save a target selection, then use a development manifest that
+  retains its role but omits that exact version and filename. Restore the entry
+  in a later catalog check.
+- Expected: The role remains selected but the firmware select reports `Select
+  firmware...`; another build with the same version label is not substituted.
+  The saved identity remains intact and is restored if the exact entry returns,
+  unless the user explicitly chooses another target first.
+
+### TARGET-03 — Staged-image migration fallback
+
+- Status: `NOT RUN`
+- Procedure: Use a development build to leave a verified staged image without a
+  target-selection preference, install the current build, then restart once
+  more.
+- Expected: On the first upgraded boot, the staged role, version, and filename
+  become the initial saved target. Subsequent boots restore the preference
+  directly; later staged-image changes do not overwrite user target intent.
+
 ### FW-01 — Coordinator upgrade
 
 - Status: `NOT RUN`

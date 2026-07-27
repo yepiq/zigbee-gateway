@@ -106,6 +106,11 @@ YZG exposes these controls in Home Assistant and its web interface:
 | **Zigbee BSL Mode** | Prepares the TI radio for a firmware update |
 | **Factory Reset Zigbee Router** | Clears a compatible router's network association and starts pairing |
 | **Refresh Zigbee Information** | Updates the displayed radio and Zigbee network information |
+| **Target Firmware Role** | Chooses coordinator or router firmware |
+| **Target Firmware Version** | Chooses a compatible build from the current online catalog |
+| **Refresh Firmware Catalog** | Checks the catalog immediately instead of waiting for the scheduled check |
+| **Simulate Zigbee Firmware Update** | Downloads and verifies the selected image, then tests the update workflow without changing the TI radio |
+| **Clear Staged Zigbee Firmware** | Discards the downloaded image so the next simulation downloads it again |
 
 Refreshing Zigbee information temporarily uses the radio connection. YZG allows
 it only in TCP mode while Zigbee2MQTT is disconnected.
@@ -123,6 +128,16 @@ through the direct USB connection.
 
 ## Update the TI Zigbee firmware
 
+YZG retrieves the compatible CC2652P7 coordinator and router builds from the
+XZG firmware catalog. It checks the catalog at startup and on schedule, and
+keeps the target role and exact selected build across ESP32 restarts.
+
+The built-in update workflow is currently a simulation. It downloads the real
+selected image, stores it on the ESP32, verifies its SHA-256, and exercises the
+remaining update stages without writing to or resetting the TI radio. A
+verified download is reused when the same selected image is still current.
+
+Actual TI radio updates currently require an external firmware-update tool.
 YZG supports ZigStarGW-MT and XZG-MT-style firmware-update tools over TCP and
 USB.
 
