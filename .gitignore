@@ -3,6 +3,8 @@
 # You can modify this file to suit your needs.
 .*
 !/.gitignore
+!/.github/
+!/.github/**
 secrets.yaml
 
 # Python bytecode and caches

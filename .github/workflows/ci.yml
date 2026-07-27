@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Compile and run host tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for source_file in tests/*_test.cpp; do
+            test_name="$(basename "${source_file}" .cpp)"
+            test_binary="${RUNNER_TEMP}/${test_name}"
+            c++ -std=c++17 -Wall -Wextra -Werror -I. \
+              "${source_file}" -o "${test_binary}"
+            "${test_binary}"
+          done
+
+  firmware:
+    name: Production firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/esphome/esphome:latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Compile YZG
+        run: esphome -q compile yzg.yaml
