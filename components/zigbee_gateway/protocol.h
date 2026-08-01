@@ -3,6 +3,7 @@
 #include "esphome/core/application.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
+#include "zigbee_bsl_frame.h"
 #include "zigbee_serial.h"
 
 using esphome::App;
@@ -267,18 +268,12 @@ static inline bool znp_exec(ZigbeeSerialInterface *uart,
 // Use these helpers for any 16/32-bit values placed into or read from BSL frames.
 static inline void encode_u32_be(uint32_t v, uint8_t out[4])
 {
-  out[0] = static_cast<uint8_t>((v >> 24) & 0xFF);
-  out[1] = static_cast<uint8_t>((v >> 16) & 0xFF);
-  out[2] = static_cast<uint8_t>((v >> 8) & 0xFF);
-  out[3] = static_cast<uint8_t>(v & 0xFF);
+  zigbee_bsl_encode_u32_be(v, out);
 }
 
 static inline uint32_t decode_u32_be(const uint8_t in[4])
 {
-  return (static_cast<uint32_t>(in[0]) << 24) |
-         (static_cast<uint32_t>(in[1]) << 16) |
-         (static_cast<uint32_t>(in[2]) << 8) |
-         (static_cast<uint32_t>(in[3]) << 0);
+  return zigbee_bsl_decode_u32_be(in);
 }
 
 // -------- BSL helpers --------
@@ -372,8 +367,107 @@ static inline bool bsl_sync(ZigbeeSerialInterface *uart, uint32_t ack_timeout_ms
 
   uart->write_byte(0x55);
   uart->flush();
-  (void)uart_seek_byte(uart, 0xCC, ack_timeout_ms); // optional ACK
-  return true;
+  return uart_seek_byte(uart, 0xCC, ack_timeout_ms);
+}
+
+// Ask the ROM bootloader to reset into the newly written application.
+// TI defines CMD_RESET as a framed 0x25 command followed by an ACK. The UART
+// connection ends when the command succeeds, so no GET_STATUS follows it.
+static inline bool bsl_reset(ZigbeeSerialInterface *uart,
+                             uint32_t ack_timeout_ms) {
+  const uint8_t payload[] = {0x25};
+  uint8_t frame[3];
+  const size_t frame_length = zigbee_bsl_build_frame(
+      payload, sizeof(payload), frame, sizeof(frame));
+  if (frame_length == 0)
+    return false;
+
+  uart->write_array(frame, frame_length);
+  uart->flush();
+  return uart_seek_byte(uart, 0xCC, ack_timeout_ms);
+}
+
+// Execute a command that returns only ACK/NACK, then query the ROM status.
+// Bank erase, download, and send-data all use this exchange pattern.
+static inline bool bsl_command_status(ZigbeeSerialInterface *uart,
+                                      const uint8_t *payload,
+                                      uint8_t payload_length,
+                                      uint32_t command_ack_timeout_ms,
+                                      uint32_t status_ack_timeout_ms,
+                                      uint32_t header_timeout_ms,
+                                      uint32_t payload_timeout_ms,
+                                      uint8_t *status_out = nullptr) {
+  if (payload == nullptr || payload_length == 0 || payload_length > 252)
+    return false;
+  if (status_out != nullptr)
+    *status_out = 0;
+
+  uint8_t frame[255];
+  const size_t frame_length = zigbee_bsl_build_frame(
+      payload, payload_length, frame, sizeof(frame));
+  if (frame_length == 0)
+    return false;
+
+  uart->write_array(frame, frame_length);
+  uart->flush();
+  if (!uart_seek_byte(uart, 0xCC, command_ack_timeout_ms))
+    return false;
+
+  uint8_t status = 0;
+  if (!bsl_get_status(uart, status_ack_timeout_ms, header_timeout_ms,
+                      payload_timeout_ms, &status))
+    return false;
+  if (status_out != nullptr)
+    *status_out = status;
+  return status == 0x40;
+}
+
+static inline bool bsl_bank_erase(ZigbeeSerialInterface *uart,
+                                  uint32_t command_ack_timeout_ms,
+                                  uint32_t status_ack_timeout_ms,
+                                  uint32_t header_timeout_ms,
+                                  uint32_t payload_timeout_ms,
+                                  uint8_t *status_out = nullptr) {
+  const uint8_t payload[] = {0x2C};
+  return bsl_command_status(uart, payload, sizeof(payload),
+                            command_ack_timeout_ms, status_ack_timeout_ms,
+                            header_timeout_ms, payload_timeout_ms, status_out);
+}
+
+static inline bool bsl_download(ZigbeeSerialInterface *uart, uint32_t address,
+                                uint32_t size,
+                                uint32_t command_ack_timeout_ms,
+                                uint32_t status_ack_timeout_ms,
+                                uint32_t header_timeout_ms,
+                                uint32_t payload_timeout_ms,
+                                uint8_t *status_out = nullptr) {
+  if (size == 0 || (size & 0x03) != 0)
+    return false;
+  uint8_t payload[9];
+  payload[0] = 0x21;
+  encode_u32_be(address, &payload[1]);
+  encode_u32_be(size, &payload[5]);
+  return bsl_command_status(uart, payload, sizeof(payload),
+                            command_ack_timeout_ms, status_ack_timeout_ms,
+                            header_timeout_ms, payload_timeout_ms, status_out);
+}
+
+static inline bool bsl_send_data(ZigbeeSerialInterface *uart,
+                                 const uint8_t *data, uint8_t length,
+                                 uint32_t command_ack_timeout_ms,
+                                 uint32_t status_ack_timeout_ms,
+                                 uint32_t header_timeout_ms,
+                                 uint32_t payload_timeout_ms,
+                                 uint8_t *status_out = nullptr) {
+  if (data == nullptr || length == 0 || length > 248)
+    return false;
+  uint8_t payload[249];
+  payload[0] = 0x24;
+  for (uint8_t index = 0; index < length; index++)
+    payload[index + 1] = data[index];
+  return bsl_command_status(uart, payload, static_cast<uint8_t>(length + 1),
+                            command_ack_timeout_ms, status_ack_timeout_ms,
+                            header_timeout_ms, payload_timeout_ms, status_out);
 }
 
 // Execute a BSL command and process its reply.
@@ -483,6 +577,57 @@ static inline bool bsl_exec(ZigbeeSerialInterface *uart,
   }
 
   return false;
+}
+
+static inline bool bsl_crc32(ZigbeeSerialInterface *uart, uint32_t address,
+                             uint32_t size, uint32_t command_ack_timeout_ms,
+                             uint32_t header_timeout_ms,
+                             uint32_t payload_timeout_ms,
+                             uint32_t status_ack_timeout_ms,
+                             uint32_t *crc_out,
+                             uint8_t *status_out = nullptr) {
+  if (size == 0 || crc_out == nullptr)
+    return false;
+  if (status_out != nullptr)
+    *status_out = 0;
+  uint8_t payload[13];
+  payload[0] = 0x27;
+  encode_u32_be(address, &payload[1]);
+  encode_u32_be(size, &payload[5]);
+  encode_u32_be(0, &payload[9]);
+
+  uint8_t frame[15];
+  const size_t frame_length = zigbee_bsl_build_frame(
+      payload, sizeof(payload), frame, sizeof(frame));
+  if (frame_length == 0)
+    return false;
+
+  uint8_t response[8] = {0};
+  uint32_t received_crc = 0;
+  bool valid_response = false;
+  bool received = bsl_exec(
+      uart, frame, static_cast<uint8_t>(frame_length),
+      [&received_crc, &valid_response](const uint8_t *reply, uint8_t length) {
+        if (length == 4) {
+          received_crc = decode_u32_be(reply);
+          valid_response = true;
+        }
+      },
+      response, sizeof(response), command_ack_timeout_ms, header_timeout_ms,
+      payload_timeout_ms, 1);
+  if (!received || !valid_response)
+    return false;
+
+  uint8_t status = 0;
+  if (!bsl_get_status(uart, status_ack_timeout_ms, header_timeout_ms,
+                      payload_timeout_ms, &status))
+    return false;
+  if (status_out != nullptr)
+    *status_out = status;
+  if (status != 0x40)
+    return false;
+  *crc_out = received_crc;
+  return true;
 }
 
 // Read memory via the BSL "MEMORY READ" command (opcode 0x2A).

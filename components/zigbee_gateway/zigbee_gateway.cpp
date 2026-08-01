@@ -29,6 +29,8 @@ static constexpr uint32_t RESET_IND_TIMEOUT_MS = 5000;
 static constexpr uint32_t RESET_PARSER_START_TIMEOUT_MS = 20;
 static constexpr uint32_t ROUTER_RESET_SETTLE_MS = 100;
 static constexpr uint32_t USB_BRIDGE_BSL_BAUD_RATE = 500000;
+static constexpr uint32_t LOCAL_FLASH_HARD_RESET_PULSE_MS = 50;
+static constexpr uint32_t LOCAL_FLASH_APPLICATION_SETTLE_MS = 500;
 
 void ZigbeeTransportSelect::setup() {
   size_t index = 0;
@@ -196,7 +198,9 @@ void ZigbeeGatewayComponent::loop() {
       !this->operation_active_ && !this->async_reset_active_)
     this->apply_transport_mode_(this->requested_transport_mode_);
 
-  if (this->transport_mode_ == ZigbeeTransportMode::TCP) {
+  if (this->local_firmware_update_active_) {
+    // The local writer owns the radio UART until verification and reset finish.
+  } else if (this->transport_mode_ == ZigbeeTransportMode::TCP) {
     if (!this->tcp_server_.is_started())
       this->tcp_server_.start();
     this->tcp_server_.loop();
@@ -569,19 +573,32 @@ bool ZigbeeGatewayComponent::save_network_snapshot_cache_() {
 
 bool ZigbeeGatewayComponent::mark_running_image_pending_() {
   // BSL can replace all image-owned values. Preserve physical identity and the
-  // last network snapshot, but clear firmware, role, active IEEE, and CCFG.
+  // last network details, but clear firmware, role, active IEEE, CCFG, and the
+  // live network-membership state because an opaque BSL session can replace it.
   const uint32_t next_generation = this->running_image_.generation + 1;
   initialize_running_image_cache(&this->running_image_, next_generation);
   this->running_image_.awaiting_observation = 1;
   this->running_image_available_ = true;
-  const bool saved = this->save_running_image_cache_();
+  const bool image_saved = this->save_running_image_cache_();
   this->publish_running_image_(this->running_image_);
   this->publish_metadata_status_("Awaiting Observation");
-  if (this->network_snapshot_available_ && this->network_snapshot_.known != 0)
-    this->publish_network_information_status_("Cached");
-  if (!saved)
+
+  bool network_saved = true;
+  if (this->network_snapshot_available_ &&
+      (this->network_snapshot_.known & NETWORK_SNAPSHOT_ON_NETWORK) != 0) {
+    mark_network_connection_unknown(&this->network_snapshot_);
+    this->network_snapshot_.generation++;
+    network_saved = this->save_network_snapshot_cache_();
+  }
+  this->publish_network_snapshot_(this->network_snapshot_);
+  this->publish_network_information_status_(
+      this->network_snapshot_.known != 0 ? "Cached" : "Unavailable");
+
+  if (!image_saved)
     ESP_LOGE(TAG, "Could not persist the pre-BSL running-image marker.");
-  return saved;
+  if (!network_saved)
+    ESP_LOGE(TAG, "Could not persist the pre-BSL network-membership invalidation.");
+  return image_saved && network_saved;
 }
 
 void ZigbeeGatewayComponent::capture_chip_info_(const ChipInfo &chip) {
@@ -863,6 +880,150 @@ void ZigbeeGatewayComponent::request_router_factory_reset() {
 
 void ZigbeeGatewayComponent::request_metadata_refresh() {
   this->defer("zigbee_metadata_refresh", [this]() { this->request_metadata_refresh_(); });
+}
+
+bool ZigbeeGatewayComponent::begin_local_firmware_update() {
+  if (this->operation_active_) {
+    ESP_LOGW(TAG, "Another Zigbee operation is active; firmware update cannot start.");
+    return false;
+  }
+  if (this->transport_mode_ == ZigbeeTransportMode::USB_DIRECT) {
+    ESP_LOGW(TAG, "Zigbee firmware update is unavailable in USB Direct mode.");
+    return false;
+  }
+
+  if (this->transport_mode_ == ZigbeeTransportMode::TCP) {
+    if (this->tcp_server_.has_any_client())
+      ESP_LOGI(TAG, "Closing the active TCP transport for the local firmware update.");
+    this->tcp_server_.shutdown();
+  } else if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED) {
+    ESP_LOGI(TAG, "Stopping the USB bridge for the local firmware update.");
+    this->usb_bridge_.stop();
+  }
+
+  if (!this->serial_.claim(ZigbeeSerialInterface::Owner::LOCAL)) {
+    ESP_LOGW(TAG, "UART is owned by another operation; firmware update cannot start.");
+    if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED)
+      this->usb_bridge_.start();
+    return false;
+  }
+  if (!this->mark_running_image_pending_()) {
+    ESP_LOGE(TAG, "Firmware update aborted because pending metadata could not be persisted.");
+    this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
+    if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED)
+      this->usb_bridge_.start();
+    return false;
+  }
+
+  this->operation_active_ = true;
+  this->local_firmware_update_active_ = true;
+  this->local_firmware_update_ready_ = false;
+  this->radio_bsl_expected_ = true;
+  this->sniffer_enabled_ = false;
+
+  this->configure_usb_bridge_baud_(USB_BRIDGE_BSL_BAUD_RATE);
+  uart_drain(&this->serial_);
+
+  ESP_LOGI(TAG, "Entering Zigbee BSL for local firmware update at %u baud.",
+           (unsigned) USB_BRIDGE_BSL_BAUD_RATE);
+  this->bsl_pin_->digital_write(true);
+  this->reset_pin_->digital_write(true);
+  this->set_timeout("zigbee_local_flash_release_reset", 50, [this]() {
+    this->reset_pin_->digital_write(false);
+    this->set_timeout("zigbee_local_flash_release_bsl", 250, [this]() {
+      this->bsl_pin_->digital_write(false);
+      this->set_timeout("zigbee_local_flash_bsl_settle", 100, [this]() {
+        this->local_firmware_update_ready_ = true;
+        ESP_LOGD(TAG, "Zigbee BSL is ready for the local firmware writer.");
+      });
+    });
+  });
+  return true;
+}
+
+bool ZigbeeGatewayComponent::record_local_firmware_install(
+    const std::string &firmware, const std::string &role) {
+  if (!this->local_firmware_update_active_) {
+    ESP_LOGW(TAG, "Ignoring installed-image metadata outside a local firmware update.");
+    return false;
+  }
+  if (!zigbee_gateway::record_local_firmware_install(
+          &this->running_image_, firmware.c_str(), role.c_str())) {
+    ESP_LOGE(TAG, "Could not record installed Zigbee firmware metadata.");
+    return false;
+  }
+
+  this->running_image_available_ = true;
+  const bool saved = this->save_running_image_cache_();
+  this->publish_running_image_(this->running_image_);
+  this->publish_metadata_status_("Awaiting Observation");
+  if (saved) {
+    ESP_LOGI(TAG, "Recorded locally installed Zigbee image: role=%s, firmware=%s",
+             role.c_str(), firmware.c_str());
+  } else {
+    ESP_LOGE(TAG, "Locally installed Zigbee image metadata could not be persisted.");
+  }
+  return saved;
+}
+
+bool ZigbeeGatewayComponent::record_local_radio_erase() {
+  if (!this->local_firmware_update_active_) {
+    ESP_LOGW(TAG, "Ignoring radio-erase metadata outside a local firmware update.");
+    return false;
+  }
+  zigbee_gateway::record_local_radio_erase(&this->network_snapshot_);
+  this->network_snapshot_available_ = true;
+  const bool saved = this->save_network_snapshot_cache_();
+  this->publish_network_snapshot_(this->network_snapshot_);
+  this->publish_network_information_status_("Cleared");
+  if (saved) {
+    ESP_LOGI(TAG, "Cleared Zigbee network metadata after local bank erase.");
+  } else {
+    ESP_LOGE(TAG, "Cleared Zigbee network metadata could not be persisted.");
+  }
+  return saved;
+}
+
+void ZigbeeGatewayComponent::finish_local_firmware_update(
+    bool bootloader_reset_acknowledged) {
+  if (!this->local_firmware_update_active_)
+    return;
+
+  this->local_firmware_update_ready_ = false;
+  this->bsl_pin_->digital_write(false);
+  if (bootloader_reset_acknowledged) {
+    ESP_LOGI(TAG,
+             "Zigbee ROM reset acknowledged; waiting for the application to start.");
+    this->settle_local_firmware_update_();
+    return;
+  }
+
+  ESP_LOGW(TAG, "Resetting Zigbee through RESET_N after the ROM reset command failed.");
+  this->reset_pin_->digital_write(true);
+  this->set_timeout("zigbee_local_flash_reset_release",
+                    LOCAL_FLASH_HARD_RESET_PULSE_MS, [this]() {
+    this->reset_pin_->digital_write(false);
+    this->settle_local_firmware_update_();
+  });
+}
+
+void ZigbeeGatewayComponent::settle_local_firmware_update_() {
+  this->restore_normal_uart_bauds_();
+  this->radio_bsl_expected_ = false;
+  this->sniffer_enabled_ = true;
+  this->set_timeout("zigbee_local_flash_application_settle",
+                    LOCAL_FLASH_APPLICATION_SETTLE_MS,
+                    [this]() { this->complete_local_firmware_update_(); });
+}
+
+void ZigbeeGatewayComponent::complete_local_firmware_update_() {
+  this->local_firmware_update_active_ = false;
+  this->operation_active_ = false;
+  this->serial_.release(ZigbeeSerialInterface::Owner::LOCAL);
+  if (this->transport_mode_ == ZigbeeTransportMode::USB_BRIDGED &&
+      !this->usb_bridge_.start())
+    ESP_LOGE(TAG, "USB bridge could not restart after the firmware update.");
+  ESP_LOGI(TAG, "Zigbee application startup settled; UART released after firmware update.");
 }
 
 void ZigbeeGatewayComponent::request_restart_() {

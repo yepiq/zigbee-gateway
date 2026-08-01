@@ -27,6 +27,9 @@
 
 namespace esphome::zigbee_gateway {
 
+class ZigbeeGatewayComponent;
+class ZigbeeSerialInterface;
+
 class ZigbeeFirmwareManager : public Component {
  public:
   void setup() override;
@@ -41,6 +44,7 @@ class ZigbeeFirmwareManager : public Component {
   void set_startup_timeout(uint32_t value) { this->startup_timeout_ms_ = value; }
   void set_http_timeout(uint32_t value) { this->http_timeout_ms_ = value; }
   void set_max_manifest_size(size_t value) { this->max_manifest_size_ = value; }
+  void set_gateway(ZigbeeGatewayComponent *gateway) { this->gateway_ = gateway; }
   void set_current_radio_role(const std::string &role);
 
   void set_role_select(select::Select *value) { this->role_select_ = value; }
@@ -58,7 +62,7 @@ class ZigbeeFirmwareManager : public Component {
   void set_target_firmware(const std::string &display_version);
   void on_network_connected();
   void request_refresh(bool force);
-  void start_flash_simulation();
+  void start_firmware_update();
   void invalidate_staged_firmware();
 
  protected:
@@ -84,9 +88,7 @@ class ZigbeeFirmwareManager : public Component {
   static constexpr uint16_t STAGING_SCHEMA = 2;
   static_assert(STAGING_HEADER_SIZE + MAX_FIRMWARE_IMAGE_SIZE <= STAGING_PARTITION_SIZE);
   static_assert(STAGING_PARTITION_SIZE % STAGING_HEADER_SIZE == 0);
-  static constexpr size_t ERASE_BLOCK_SIZE = 8192;
   static constexpr size_t WRITE_BLOCK_SIZE = 248;
-  static constexpr uint32_t FLASH_STEP_INTERVAL_MS = 6;
 
   struct FirmwareEntry {
     std::string role;
@@ -172,11 +174,45 @@ class ZigbeeFirmwareManager : public Component {
     PREPARING_DOWNLOAD,
     DOWNLOADING,
     CHECKING_DOWNLOAD,
+    ENTERING_BSL,
     ERASING,
     WRITING,
     VERIFYING,
+    RESTARTING,
     COMPLETE,
     FAILED,
+  };
+
+  enum class RadioFlashStage : uint8_t {
+    IDLE,
+    SYNCING,
+    ERASING,
+    WRITING,
+    VERIFYING,
+    RESTARTING,
+  };
+
+  enum class RadioFlashError : uint8_t {
+    NONE,
+    INVALID_IMAGE_SIZE,
+    BSL_SYNC_FAILED,
+    BANK_ERASE_FAILED,
+    DOWNLOAD_FAILED,
+    STAGING_READ_FAILED,
+    SEND_DATA_FAILED,
+    CRC_COMMAND_FAILED,
+    CRC_MISMATCH,
+  };
+
+  struct RadioFlashResult {
+    RadioFlashError error{RadioFlashError::NONE};
+    bool bank_erased{false};
+    bool bootloader_reset_acknowledged{false};
+    uint8_t rom_status{0};
+    uint32_t offset{0};
+    uint32_t local_crc{0};
+    uint32_t radio_crc{0};
+    uint32_t duration_ms{0};
   };
 
   enum class DownloadPhase : uint8_t {
@@ -191,6 +227,7 @@ class ZigbeeFirmwareManager : public Component {
   static esp_err_t firmware_http_event_handler_(esp_http_client_event_t *event);
   static void firmware_probe_task_entry_(void *parameter);
   static esp_err_t firmware_probe_http_event_handler_(esp_http_client_event_t *event);
+  static void radio_flash_task_entry_(void *parameter);
 
   void fetch_task_();
   bool start_fetch_();
@@ -226,10 +263,15 @@ class ZigbeeFirmwareManager : public Component {
   void begin_staged_image_check_();
   void advance_staged_image_check_();
   void handle_staged_image_check_failure_(const char *reason);
-  void advance_flash_simulation_();
+  void begin_radio_flash_();
+  bool start_radio_flash_task_();
+  void radio_flash_task_();
+  void update_radio_flash_status_();
+  void handle_radio_flash_result_();
+  static const char *radio_flash_error_name_(RadioFlashError error);
   void begin_flash_stage_(FlashState state, const char *status);
-  void fail_flash_simulation_(const std::string &reason);
-  void finish_flash_simulation_();
+  void fail_firmware_update_(const std::string &reason);
+  void finish_firmware_update_();
   void publish_flash_progress_(uint8_t progress);
   void update_download_progress_();
   bool write_staging_header_();
@@ -253,6 +295,8 @@ class ZigbeeFirmwareManager : public Component {
   static void set_select_options_(select::Select *target, const std::vector<std::string> &options);
 
   std::string manifest_url_;
+  ZigbeeGatewayComponent *gateway_{nullptr};
+  ZigbeeSerialInterface *radio_flash_serial_{nullptr};
   std::string chip_;
   std::string preferred_role_;
   std::string current_radio_role_;
@@ -310,19 +354,17 @@ class ZigbeeFirmwareManager : public Component {
   std::atomic<size_t> firmware_staging_erase_bytes_{0};
   std::atomic<size_t> firmware_download_bytes_{0};
   std::atomic<size_t> firmware_download_total_{0};
+  RadioFlashResult radio_flash_result_{};
+  std::atomic<bool> radio_flash_running_{false};
+  std::atomic<bool> radio_flash_done_{false};
+  std::atomic<RadioFlashStage> radio_flash_stage_{RadioFlashStage::IDLE};
+  std::atomic<uint8_t> radio_flash_progress_{0};
+  RadioFlashStage published_radio_flash_stage_{RadioFlashStage::IDLE};
   FlashState flash_state_{FlashState::IDLE};
   uint32_t flash_started_ms_{0};
-  uint32_t flash_stage_started_ms_{0};
-  uint32_t next_flash_action_ms_{0};
   size_t flash_work_offset_{0};
   size_t flash_image_size_{0};
   std::array<uint8_t, 32> flash_image_digest_{};
-  mbedtls_sha256_context simulated_write_sha_context_{};
-  mbedtls_sha256_context simulated_verify_sha_context_{};
-  std::array<uint8_t, 32> simulated_write_digest_{};
-  std::array<uint8_t, 32> simulated_verify_digest_{};
-  bool simulated_write_sha_active_{false};
-  bool simulated_verify_sha_active_{false};
   uint8_t last_flash_progress_{255};
   uint8_t next_flash_progress_log_{10};
   uint8_t staging_scratch_[STAGING_IO_BLOCK_SIZE]{};
@@ -360,10 +402,10 @@ class FirmwareCatalogRefreshButton : public button::Button,
   void press_action() override { this->parent_->request_refresh(false); }
 };
 
-class FirmwareUpdateSimulationButton : public button::Button,
-                                       public Parented<ZigbeeFirmwareManager> {
+class FirmwareInstallButton : public button::Button,
+                              public Parented<ZigbeeFirmwareManager> {
  protected:
-  void press_action() override { this->parent_->start_flash_simulation(); }
+  void press_action() override { this->parent_->start_firmware_update(); }
 };
 
 class StagedFirmwareInvalidateButton : public button::Button,

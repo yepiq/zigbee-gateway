@@ -117,6 +117,27 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void request_bsl();
   void request_router_factory_reset();
   void request_metadata_refresh();
+  bool begin_local_firmware_update();
+  bool local_firmware_update_ready() const {
+    return this->local_firmware_update_ready_;
+  }
+  bool local_firmware_update_active() const {
+    return this->local_firmware_update_active_;
+  }
+  ZigbeeSerialInterface *local_firmware_update_serial() {
+    return this->local_firmware_update_ready_ && this->serial_.is_local_owner()
+               ? &this->serial_
+               : nullptr;
+  }
+  bool record_local_firmware_install(const std::string &firmware,
+                                     const std::string &role);
+  bool record_local_radio_erase();
+  void finish_local_firmware_update(bool bootloader_reset_acknowledged);
+  uint32_t radio_flash_size_bytes() const {
+    return (this->physical_identity_.known & PHYSICAL_IDENTITY_FLASH_SIZE) != 0
+               ? this->physical_identity_.flash_size_bytes
+               : 0;
+  }
   void request_transport_mode(ZigbeeTransportMode mode) {
     this->requested_transport_mode_ = mode;
   }
@@ -167,6 +188,8 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void request_metadata_refresh_();
   void enter_bsl_for_remote_();
   void reset_for_remote_();
+  void settle_local_firmware_update_();
+  void complete_local_firmware_update_();
   void on_tcp_normal_session_started_();
   void on_tcp_normal_session_finished_();
   void on_tcp_maintenance_finished_();
@@ -259,6 +282,8 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   ZigbeeTransportMode requested_transport_mode_{ZigbeeTransportMode::TCP};
   bool sniffer_enabled_{true};
   bool radio_bsl_expected_{false};
+  bool local_firmware_update_active_{false};
+  bool local_firmware_update_ready_{false};
   bool operation_active_{false};
   bool async_reset_active_{false};
   uint32_t async_reset_started_ms_{0};

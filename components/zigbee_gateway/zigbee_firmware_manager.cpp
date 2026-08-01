@@ -1,5 +1,8 @@
 #include "zigbee_firmware_manager.h"
+#include "protocol.h"
+#include "zigbee_crc32.h"
 #include "zigbee_firmware_target.h"
+#include "zigbee_gateway.h"
 
 #include "esphome/components/json/json_util.h"
 #include "esphome/components/network/util.h"
@@ -21,6 +24,18 @@
 namespace esphome::zigbee_gateway {
 
 static const char *const TAG = "zigbee_firmware";
+static constexpr uint32_t RADIO_BSL_SYNC_ACK_TIMEOUT_MS = 1000;
+static constexpr uint32_t RADIO_BSL_SYNC_GAP_MS = 5;
+static constexpr uint32_t RADIO_BSL_STATUS_ACK_TIMEOUT_MS = 250;
+static constexpr uint32_t RADIO_BSL_HEADER_TIMEOUT_MS = 250;
+static constexpr uint32_t RADIO_BSL_PAYLOAD_TIMEOUT_MS = 250;
+static constexpr uint32_t RADIO_BSL_ERASE_ACK_TIMEOUT_MS = 15000;
+static constexpr uint32_t RADIO_BSL_DOWNLOAD_ACK_TIMEOUT_MS = 2000;
+static constexpr uint32_t RADIO_BSL_DATA_ACK_TIMEOUT_MS = 5000;
+static constexpr uint32_t RADIO_BSL_CRC_ACK_TIMEOUT_MS = 5000;
+static constexpr uint32_t RADIO_BSL_RESET_ACK_TIMEOUT_MS = 1000;
+static constexpr uint32_t RADIO_FLASH_START_ADDRESS = 0;
+static constexpr size_t RADIO_FLASH_TASK_STACK_SIZE = 8192;
 
 void FirmwareRoleSelect::dump_config() {
   LOG_SELECT("", "Target Firmware Role", this);
@@ -113,16 +128,30 @@ void ZigbeeFirmwareManager::loop() {
     return;
   }
 
+  if (this->radio_flash_done_.exchange(false, std::memory_order_acquire)) {
+    this->handle_radio_flash_result_();
+    return;
+  }
+
   if (this->flash_state_ == FlashState::DOWNLOADING) {
     this->update_download_progress_();
   } else if (this->flash_state_ == FlashState::PREPARING_DOWNLOAD) {
     this->update_download_progress_();
   } else if (this->flash_state_ == FlashState::CHECKING_DOWNLOAD) {
     this->advance_staged_image_check_();
+  } else if (this->flash_state_ == FlashState::ENTERING_BSL) {
+    if (this->radio_flash_running_.load(std::memory_order_acquire))
+      this->update_radio_flash_status_();
+    else if (this->gateway_ != nullptr && this->gateway_->local_firmware_update_ready())
+      this->start_radio_flash_task_();
   } else if (this->flash_state_ == FlashState::ERASING ||
              this->flash_state_ == FlashState::WRITING ||
              this->flash_state_ == FlashState::VERIFYING) {
-    this->advance_flash_simulation_();
+    this->update_radio_flash_status_();
+  } else if (this->flash_state_ == FlashState::RESTARTING &&
+             this->gateway_ != nullptr &&
+             !this->gateway_->local_firmware_update_active()) {
+    this->finish_firmware_update_();
   }
 
 }
@@ -202,7 +231,7 @@ void ZigbeeFirmwareManager::set_current_radio_role(const std::string &role) {
 
 void ZigbeeFirmwareManager::set_target_role(const std::string &display_role) {
   if (this->flash_active_()) {
-    ESP_LOGW(TAG, "Target role cannot change while firmware simulation is active");
+    ESP_LOGW(TAG, "Target role cannot change while a firmware update is active");
     if (this->role_select_ != nullptr)
       this->role_select_->publish_state(this->role_display_from_key_(this->active_role_));
     return;
@@ -232,7 +261,7 @@ void ZigbeeFirmwareManager::set_target_role(const std::string &display_role) {
 
 void ZigbeeFirmwareManager::set_target_firmware(const std::string &display_version) {
   if (this->flash_active_()) {
-    ESP_LOGW(TAG, "Target firmware cannot change while firmware simulation is active");
+    ESP_LOGW(TAG, "Target firmware cannot change while a firmware update is active");
     if (this->firmware_select_ != nullptr)
       this->firmware_select_->publish_state(this->selected_firmware_label_);
     return;
@@ -281,7 +310,7 @@ void ZigbeeFirmwareManager::on_network_connected() {
 
 void ZigbeeFirmwareManager::request_refresh(bool force) {
   if (this->flash_active_()) {
-    ESP_LOGW(TAG, "Catalog refresh ignored while firmware simulation is active");
+    ESP_LOGW(TAG, "Catalog refresh ignored while a firmware update is active");
     return;
   }
   if (this->fetch_requested_ || this->fetch_running_.load(std::memory_order_acquire) ||
@@ -299,24 +328,24 @@ void ZigbeeFirmwareManager::request_refresh(bool force) {
   }
 }
 
-void ZigbeeFirmwareManager::start_flash_simulation() {
+void ZigbeeFirmwareManager::start_firmware_update() {
   if (this->flash_active_()) {
-    ESP_LOGW(TAG, "Firmware simulation is already active");
+    ESP_LOGW(TAG, "A Zigbee firmware update is already active");
     return;
   }
   if (this->staging_partition_ == nullptr) {
-    this->fail_flash_simulation_("Firmware staging unavailable");
+    this->fail_firmware_update_("Firmware staging unavailable");
     return;
   }
   if (this->fetch_requested_ || this->fetch_running_.load(std::memory_order_acquire) ||
       this->fetch_done_.load(std::memory_order_acquire)) {
-    this->fail_flash_simulation_("Catalog refresh is active");
+    this->fail_firmware_update_("Catalog refresh is active");
     return;
   }
   const auto *selected =
       this->find_entry_(this->active_role_, this->selected_firmware_label_);
   if (selected == nullptr) {
-    this->fail_flash_simulation_("Select firmware first");
+    this->fail_firmware_update_("Select firmware first");
     return;
   }
 
@@ -324,12 +353,10 @@ void ZigbeeFirmwareManager::start_flash_simulation() {
   this->flash_started_ms_ = millis();
   this->flash_image_size_ = 0;
   this->flash_image_digest_.fill(0);
-  this->simulated_write_digest_.fill(0);
-  this->simulated_verify_digest_.fill(0);
   this->last_flash_progress_ = 255;
   this->next_flash_progress_log_ = 10;
   this->publish_flash_progress_(0);
-  ESP_LOGI(TAG, "Firmware simulation started: role=%s, version=%s, file=%s, baud=%" PRIu32,
+  ESP_LOGI(TAG, "Zigbee firmware update started: role=%s, version=%s, file=%s, baud=%" PRIu32,
            this->flash_entry_.role.c_str(), this->flash_entry_.version.c_str(),
            this->flash_entry_.filename.c_str(), this->flash_entry_.baud_rate);
   if (this->staged_image_matches_(this->flash_entry_)) {
@@ -348,18 +375,18 @@ void ZigbeeFirmwareManager::start_flash_simulation() {
   }
 
   if (!network::is_connected()) {
-    this->fail_flash_simulation_("Network unavailable and selected firmware is not staged");
+    this->fail_firmware_update_("Network unavailable and selected firmware is not staged");
     return;
   }
   ESP_LOGD(TAG, "Selected firmware is not staged; downloading %s",
            this->flash_entry_.filename.c_str());
   if (!this->start_firmware_download_())
-    this->fail_flash_simulation_("Could not start download task");
+    this->fail_firmware_update_("Could not start download task");
 }
 
 void ZigbeeFirmwareManager::invalidate_staged_firmware() {
   if (this->flash_active_()) {
-    ESP_LOGW(TAG, "Staged firmware cannot be invalidated while an update simulation is active");
+    ESP_LOGW(TAG, "Staged firmware cannot be invalidated while an update is active");
     return;
   }
   if (!this->invalidate_staged_firmware_("manual request", true)) {
@@ -542,7 +569,7 @@ void ZigbeeFirmwareManager::handle_firmware_probe_result_() {
              this->staged_header_.etag[0] == '\0' ? "(none)" : this->staged_header_.etag,
              result.etag.empty() ? "(none)" : result.etag.c_str());
     if (!this->start_firmware_download_())
-      this->fail_flash_simulation_("Could not start replacement download");
+      this->fail_firmware_update_("Could not start replacement download");
     return;
   }
 
@@ -738,31 +765,31 @@ bool ZigbeeFirmwareManager::start_firmware_download_() {
 void ZigbeeFirmwareManager::handle_firmware_download_result_() {
   const auto &result = this->firmware_download_result_;
   if (result.staging_error != ESP_OK) {
-    this->fail_flash_simulation_(
+    this->fail_firmware_update_(
         std::string("Firmware storage failed: ") + esp_err_to_name(result.staging_error));
     return;
   }
   if (result.hash_failed) {
-    this->fail_flash_simulation_("Firmware SHA-256 failed");
+    this->fail_firmware_update_("Firmware SHA-256 failed");
     return;
   }
   if (result.body_too_large) {
-    this->fail_flash_simulation_("Firmware exceeds the 704 KiB radio flash");
+    this->fail_firmware_update_("Firmware exceeds the 704 KiB radio flash");
     return;
   }
   if (result.error != ESP_OK) {
-    this->fail_flash_simulation_(
+    this->fail_firmware_update_(
         std::string("Download failed: ") + esp_err_to_name(result.error));
     return;
   }
   if (result.status_code != 200) {
     char reason[64];
     snprintf(reason, sizeof(reason), "Download failed: HTTP %d", result.status_code);
-    this->fail_flash_simulation_(reason);
+    this->fail_firmware_update_(reason);
     return;
   }
   if (result.received_length == 0) {
-    this->fail_flash_simulation_("Download failed: empty image");
+    this->fail_firmware_update_("Download failed: empty image");
     return;
   }
   if (result.declared_length != 0 &&
@@ -771,7 +798,7 @@ void ZigbeeFirmwareManager::handle_firmware_download_result_() {
     snprintf(reason, sizeof(reason), "Download incomplete: expected %u, received %u",
              static_cast<unsigned>(result.declared_length),
              static_cast<unsigned>(result.received_length));
-    this->fail_flash_simulation_(reason);
+    this->fail_firmware_update_(reason);
     return;
   }
 
@@ -786,7 +813,7 @@ void ZigbeeFirmwareManager::handle_firmware_download_result_() {
 
 void ZigbeeFirmwareManager::use_staged_firmware_(const char *reason) {
   if (!this->staged_image_valid_) {
-    this->fail_flash_simulation_("No valid staged firmware is available");
+    this->fail_firmware_update_("No valid staged firmware is available");
     return;
   }
   this->flash_image_size_ = this->staged_header_.image_size;
@@ -803,7 +830,7 @@ void ZigbeeFirmwareManager::begin_staged_image_check_() {
   mbedtls_sha256_init(&this->staged_image_sha_context_);
   if (mbedtls_sha256_starts(&this->staged_image_sha_context_, 0) != 0) {
     mbedtls_sha256_free(&this->staged_image_sha_context_);
-    this->fail_flash_simulation_("Could not start staged image verification");
+    this->fail_firmware_update_("Could not start staged image verification");
     return;
   }
   this->staged_image_sha_active_ = true;
@@ -819,7 +846,7 @@ void ZigbeeFirmwareManager::advance_staged_image_check_() {
     if (mbedtls_sha256_finish(&this->staged_image_sha_context_, readback_digest.data()) != 0) {
       mbedtls_sha256_free(&this->staged_image_sha_context_);
       this->staged_image_sha_active_ = false;
-      this->fail_flash_simulation_("Could not finish staged image verification");
+      this->fail_firmware_update_("Could not finish staged image verification");
       return;
     }
     mbedtls_sha256_free(&this->staged_image_sha_context_);
@@ -829,13 +856,13 @@ void ZigbeeFirmwareManager::advance_staged_image_check_() {
       return;
     }
     if (this->finalize_staging_after_check_ && !this->write_staging_header_()) {
-      this->fail_flash_simulation_("Could not finalize staged firmware");
+      this->fail_firmware_update_("Could not finalize staged firmware");
       return;
     }
     ESP_LOGD(TAG, "Staged firmware verified from flash: SHA-256=%s",
              sha256_to_string_(readback_digest).c_str());
     this->publish_flash_progress_(35);
-    this->begin_flash_stage_(FlashState::ERASING, "Erasing radio (simulated)");
+    this->begin_radio_flash_();
     return;
   }
 
@@ -851,7 +878,7 @@ void ZigbeeFirmwareManager::advance_staged_image_check_() {
                             length) != 0) {
     mbedtls_sha256_free(&this->staged_image_sha_context_);
     this->staged_image_sha_active_ = false;
-    this->fail_flash_simulation_("Could not verify staged firmware");
+    this->fail_firmware_update_("Could not verify staged firmware");
     return;
   }
   this->flash_work_offset_ += length;
@@ -861,149 +888,299 @@ void ZigbeeFirmwareManager::advance_staged_image_check_() {
 
 void ZigbeeFirmwareManager::handle_staged_image_check_failure_(const char *reason) {
   if (this->finalize_staging_after_check_) {
-    this->fail_flash_simulation_(reason);
+    this->fail_firmware_update_(reason);
     return;
   }
 
   ESP_LOGW(TAG, "%s; invalidating the cached image", reason);
   if (!network::is_connected()) {
     this->invalidate_staged_firmware_("local verification failed", false);
-    this->fail_flash_simulation_(
+    this->fail_firmware_update_(
         "Staged firmware is corrupt and the network is unavailable");
     return;
   }
   if (!this->start_firmware_download_())
-    this->fail_flash_simulation_("Could not replace invalid staged firmware");
+    this->fail_firmware_update_("Could not replace invalid staged firmware");
 }
 
 void ZigbeeFirmwareManager::begin_flash_stage_(FlashState state, const char *status) {
-  if (state == FlashState::WRITING) {
-    mbedtls_sha256_init(&this->simulated_write_sha_context_);
-    if (mbedtls_sha256_starts(&this->simulated_write_sha_context_, 0) != 0) {
-      mbedtls_sha256_free(&this->simulated_write_sha_context_);
-      this->fail_flash_simulation_("Could not start simulated write SHA-256");
-      return;
-    }
-    this->simulated_write_sha_active_ = true;
-  } else if (state == FlashState::VERIFYING) {
-    mbedtls_sha256_init(&this->simulated_verify_sha_context_);
-    if (mbedtls_sha256_starts(&this->simulated_verify_sha_context_, 0) != 0) {
-      mbedtls_sha256_free(&this->simulated_verify_sha_context_);
-      this->fail_flash_simulation_("Could not start simulated verification SHA-256");
-      return;
-    }
-    this->simulated_verify_sha_active_ = true;
-  }
   this->flash_state_ = state;
-  this->flash_stage_started_ms_ = millis();
   this->flash_work_offset_ = 0;
-  this->next_flash_action_ms_ = millis();
   ESP_LOGD(TAG, "Firmware update stage: %s", status);
   if (this->flash_status_text_sensor_ != nullptr)
     this->flash_status_text_sensor_->publish_state(status);
 }
 
-void ZigbeeFirmwareManager::advance_flash_simulation_() {
-  const uint32_t now = millis();
-  if (static_cast<int32_t>(now - this->next_flash_action_ms_) < 0)
+void ZigbeeFirmwareManager::begin_radio_flash_() {
+  if (this->gateway_ == nullptr) {
+    this->fail_firmware_update_("Zigbee gateway is unavailable");
     return;
-  this->next_flash_action_ms_ = now + FLASH_STEP_INTERVAL_MS;
+  }
+  const uint32_t radio_size = this->gateway_->radio_flash_size_bytes();
+  if (radio_size == 0 || this->flash_image_size_ != radio_size ||
+      (this->flash_image_size_ & 0x03) != 0) {
+    ESP_LOGE(TAG, "Firmware image size %u does not match radio flash size %u",
+             static_cast<unsigned>(this->flash_image_size_),
+             static_cast<unsigned>(radio_size));
+    this->fail_firmware_update_("Firmware image does not match radio flash size");
+    return;
+  }
+  if (!this->gateway_->begin_local_firmware_update()) {
+    this->fail_firmware_update_("Could not claim the Zigbee radio");
+    return;
+  }
+  this->begin_flash_stage_(FlashState::ENTERING_BSL,
+                           "Entering radio bootloader");
+}
 
-  if (this->flash_state_ == FlashState::ERASING) {
-    if (this->flash_work_offset_ >= this->flash_image_size_) {
-      ESP_LOGD(TAG, "Simulated erase complete in %" PRIu32 " ms",
-               now - this->flash_stage_started_ms_);
-      this->begin_flash_stage_(FlashState::WRITING, "Writing radio (simulated)");
-      return;
-    }
-    this->flash_work_offset_ =
-        std::min(this->flash_work_offset_ + ERASE_BLOCK_SIZE, this->flash_image_size_);
-    this->publish_flash_progress_(
-        static_cast<uint8_t>(35 + (this->flash_work_offset_ * 10) /
-                                      this->flash_image_size_));
+bool ZigbeeFirmwareManager::start_radio_flash_task_() {
+  if (this->radio_flash_running_.load(std::memory_order_acquire) ||
+      this->radio_flash_done_.load(std::memory_order_acquire))
+    return false;
+  this->radio_flash_serial_ = this->gateway_->local_firmware_update_serial();
+  if (this->radio_flash_serial_ == nullptr) {
+    this->fail_firmware_update_("Zigbee bootloader UART is unavailable");
+    this->gateway_->finish_local_firmware_update(false);
+    return false;
+  }
+
+  this->radio_flash_result_ = {};
+  this->radio_flash_stage_.store(RadioFlashStage::SYNCING,
+                                 std::memory_order_release);
+  this->radio_flash_progress_.store(35, std::memory_order_release);
+  this->published_radio_flash_stage_ = RadioFlashStage::IDLE;
+  this->radio_flash_done_.store(false, std::memory_order_release);
+  this->radio_flash_running_.store(true, std::memory_order_release);
+  BaseType_t created = xTaskCreate(
+      &ZigbeeFirmwareManager::radio_flash_task_entry_, "zigbee_radio_flash",
+      RADIO_FLASH_TASK_STACK_SIZE, this, 1, nullptr);
+  if (created != pdPASS) {
+    this->radio_flash_running_.store(false, std::memory_order_release);
+    this->fail_firmware_update_("Could not create radio firmware task");
+    this->gateway_->finish_local_firmware_update(false);
+    return false;
+  }
+  this->update_radio_flash_status_();
+  return true;
+}
+
+void ZigbeeFirmwareManager::radio_flash_task_entry_(void *parameter) {
+  auto *self = static_cast<ZigbeeFirmwareManager *>(parameter);
+  self->radio_flash_task_();
+  vTaskDelete(nullptr);
+}
+
+void ZigbeeFirmwareManager::radio_flash_task_() {
+  const uint32_t started = millis();
+  auto finish = [this, started](RadioFlashError error, uint8_t rom_status,
+                                uint32_t offset) {
+    this->radio_flash_result_.error = error;
+    this->radio_flash_result_.rom_status = rom_status;
+    this->radio_flash_result_.offset = offset;
+    this->radio_flash_result_.duration_ms = millis() - started;
+    this->radio_flash_running_.store(false, std::memory_order_release);
+    this->radio_flash_done_.store(true, std::memory_order_release);
+  };
+
+  auto *serial = this->radio_flash_serial_;
+  if (serial == nullptr ||
+      !bsl_sync(serial, RADIO_BSL_SYNC_ACK_TIMEOUT_MS,
+                RADIO_BSL_SYNC_GAP_MS)) {
+    finish(RadioFlashError::BSL_SYNC_FAILED, 0, 0);
     return;
   }
 
-  if (this->flash_state_ == FlashState::WRITING) {
-    if (this->flash_work_offset_ >= this->flash_image_size_) {
-      if (mbedtls_sha256_finish(&this->simulated_write_sha_context_,
-                                this->simulated_write_digest_.data()) != 0) {
-        mbedtls_sha256_free(&this->simulated_write_sha_context_);
-        this->simulated_write_sha_active_ = false;
-        this->fail_flash_simulation_("Could not finish simulated write SHA-256");
-        return;
-      }
-      mbedtls_sha256_free(&this->simulated_write_sha_context_);
-      this->simulated_write_sha_active_ = false;
-      if (this->simulated_write_digest_ != this->flash_image_digest_) {
-        this->fail_flash_simulation_("Simulated write data mismatch");
-        return;
-      }
-      ESP_LOGD(TAG, "Simulated write complete in %" PRIu32 " ms, SHA-256=%s",
-               now - this->flash_stage_started_ms_,
-               sha256_to_string_(this->simulated_write_digest_).c_str());
-      this->begin_flash_stage_(FlashState::VERIFYING, "Verifying radio (simulated)");
-      return;
-    }
+  this->radio_flash_stage_.store(RadioFlashStage::ERASING,
+                                 std::memory_order_release);
+  this->radio_flash_progress_.store(36, std::memory_order_release);
+  uint8_t rom_status = 0;
+  if (!bsl_bank_erase(serial, RADIO_BSL_ERASE_ACK_TIMEOUT_MS,
+                      RADIO_BSL_STATUS_ACK_TIMEOUT_MS,
+                      RADIO_BSL_HEADER_TIMEOUT_MS,
+                      RADIO_BSL_PAYLOAD_TIMEOUT_MS, &rom_status)) {
+    finish(RadioFlashError::BANK_ERASE_FAILED, rom_status, 0);
+    return;
+  }
+  this->radio_flash_result_.bank_erased = true;
+  this->radio_flash_progress_.store(45, std::memory_order_release);
+
+  if (!bsl_download(serial, RADIO_FLASH_START_ADDRESS,
+                    static_cast<uint32_t>(this->flash_image_size_),
+                    RADIO_BSL_DOWNLOAD_ACK_TIMEOUT_MS,
+                    RADIO_BSL_STATUS_ACK_TIMEOUT_MS,
+                    RADIO_BSL_HEADER_TIMEOUT_MS,
+                    RADIO_BSL_PAYLOAD_TIMEOUT_MS, &rom_status)) {
+    finish(RadioFlashError::DOWNLOAD_FAILED, rom_status, 0);
+    return;
+  }
+
+  this->radio_flash_stage_.store(RadioFlashStage::WRITING,
+                                 std::memory_order_release);
+  uint8_t buffer[WRITE_BLOCK_SIZE];
+  uint32_t crc = 0xFFFFFFFFUL;
+  size_t offset = 0;
+  while (offset < this->flash_image_size_) {
     const size_t length =
-        std::min(WRITE_BLOCK_SIZE, this->flash_image_size_ - this->flash_work_offset_);
-    if (!this->read_staged_bytes_(this->flash_work_offset_, this->staging_scratch_, length)) {
-      this->fail_flash_simulation_("Could not read staged firmware for write");
+        std::min(WRITE_BLOCK_SIZE, this->flash_image_size_ - offset);
+    if (!this->read_staged_bytes_(offset, buffer, length)) {
+      finish(RadioFlashError::STAGING_READ_FAILED, 0,
+             static_cast<uint32_t>(offset));
       return;
     }
-    if (mbedtls_sha256_update(&this->simulated_write_sha_context_, this->staging_scratch_,
-                              length) != 0) {
-      this->fail_flash_simulation_("Could not hash simulated write data");
+    if (!bsl_send_data(serial, buffer, static_cast<uint8_t>(length),
+                       RADIO_BSL_DATA_ACK_TIMEOUT_MS,
+                       RADIO_BSL_STATUS_ACK_TIMEOUT_MS,
+                       RADIO_BSL_HEADER_TIMEOUT_MS,
+                       RADIO_BSL_PAYLOAD_TIMEOUT_MS, &rom_status)) {
+      finish(RadioFlashError::SEND_DATA_FAILED, rom_status,
+             static_cast<uint32_t>(offset));
       return;
     }
-    this->flash_work_offset_ += length;
-    this->publish_flash_progress_(
-        static_cast<uint8_t>(45 + (this->flash_work_offset_ * 45) /
-                                      this->flash_image_size_));
+    crc = zigbee_crc32_update(crc, buffer, length);
+    offset += length;
+    this->radio_flash_progress_.store(
+        static_cast<uint8_t>(45 + (offset * 45) / this->flash_image_size_),
+        std::memory_order_release);
+    vTaskDelay(1);
+  }
+  this->radio_flash_result_.local_crc = crc ^ 0xFFFFFFFFUL;
+
+  this->radio_flash_stage_.store(RadioFlashStage::VERIFYING,
+                                 std::memory_order_release);
+  this->radio_flash_progress_.store(95, std::memory_order_release);
+  uint32_t radio_crc = 0;
+  if (!bsl_crc32(serial, RADIO_FLASH_START_ADDRESS,
+                 static_cast<uint32_t>(this->flash_image_size_),
+                 RADIO_BSL_CRC_ACK_TIMEOUT_MS, RADIO_BSL_HEADER_TIMEOUT_MS,
+                 RADIO_BSL_PAYLOAD_TIMEOUT_MS,
+                 RADIO_BSL_STATUS_ACK_TIMEOUT_MS, &radio_crc, &rom_status)) {
+    finish(RadioFlashError::CRC_COMMAND_FAILED, rom_status,
+           static_cast<uint32_t>(this->flash_image_size_));
+    return;
+  }
+  this->radio_flash_result_.radio_crc = radio_crc;
+  if (radio_crc != this->radio_flash_result_.local_crc) {
+    finish(RadioFlashError::CRC_MISMATCH, 0,
+           static_cast<uint32_t>(this->flash_image_size_));
     return;
   }
 
-  if (this->flash_state_ != FlashState::VERIFYING)
-    return;
+  this->radio_flash_stage_.store(RadioFlashStage::RESTARTING,
+                                 std::memory_order_release);
+  this->radio_flash_progress_.store(99, std::memory_order_release);
+  this->radio_flash_result_.bootloader_reset_acknowledged =
+      bsl_reset(serial, RADIO_BSL_RESET_ACK_TIMEOUT_MS);
+  this->radio_flash_progress_.store(100, std::memory_order_release);
+  finish(RadioFlashError::NONE, 0,
+         static_cast<uint32_t>(this->flash_image_size_));
+}
 
-  if (this->flash_work_offset_ >= this->flash_image_size_) {
-    if (mbedtls_sha256_finish(&this->simulated_verify_sha_context_,
-                              this->simulated_verify_digest_.data()) != 0) {
-      mbedtls_sha256_free(&this->simulated_verify_sha_context_);
-      this->simulated_verify_sha_active_ = false;
-      this->fail_flash_simulation_("Could not finish simulated verification SHA-256");
-      return;
+void ZigbeeFirmwareManager::update_radio_flash_status_() {
+  const RadioFlashStage stage =
+      this->radio_flash_stage_.load(std::memory_order_acquire);
+  if (stage != this->published_radio_flash_stage_) {
+    this->published_radio_flash_stage_ = stage;
+    const char *status = nullptr;
+    switch (stage) {
+      case RadioFlashStage::SYNCING:
+        status = "Synchronizing radio bootloader";
+        this->flash_state_ = FlashState::ENTERING_BSL;
+        break;
+      case RadioFlashStage::ERASING:
+        status = "Erasing radio";
+        this->flash_state_ = FlashState::ERASING;
+        break;
+      case RadioFlashStage::WRITING:
+        status = "Writing radio";
+        this->flash_state_ = FlashState::WRITING;
+        break;
+      case RadioFlashStage::VERIFYING:
+        status = "Verifying radio";
+        this->flash_state_ = FlashState::VERIFYING;
+        break;
+      case RadioFlashStage::RESTARTING:
+        status = "Restarting radio";
+        this->flash_state_ = FlashState::RESTARTING;
+        break;
+      case RadioFlashStage::IDLE:
+        break;
     }
-    mbedtls_sha256_free(&this->simulated_verify_sha_context_);
-    this->simulated_verify_sha_active_ = false;
-    if (this->simulated_verify_digest_ != this->simulated_write_digest_ ||
-        this->simulated_verify_digest_ != this->flash_image_digest_) {
-      this->fail_flash_simulation_("Simulated verification mismatch");
-      return;
+    if (status != nullptr) {
+      ESP_LOGI(TAG, "Firmware update stage: %s", status);
+      if (this->flash_status_text_sensor_ != nullptr)
+        this->flash_status_text_sensor_->publish_state(status);
     }
-    ESP_LOGD(TAG, "Simulated verification complete in %" PRIu32 " ms, SHA-256=%s",
-             now - this->flash_stage_started_ms_,
-             sha256_to_string_(this->simulated_verify_digest_).c_str());
-    this->finish_flash_simulation_();
-    return;
   }
-
-  const size_t length =
-      std::min(WRITE_BLOCK_SIZE, this->flash_image_size_ - this->flash_work_offset_);
-  // The staged bytes stand in for the BSL response until radio access is implemented.
-  if (!this->read_staged_bytes_(this->flash_work_offset_, this->staging_scratch_, length)) {
-    this->fail_flash_simulation_("Could not read staged firmware for verification");
-    return;
-  }
-  if (mbedtls_sha256_update(&this->simulated_verify_sha_context_,
-                            this->staging_scratch_, length) != 0) {
-    this->fail_flash_simulation_("Could not hash simulated verification data");
-    return;
-  }
-  this->flash_work_offset_ += length;
   this->publish_flash_progress_(
-      static_cast<uint8_t>(90 + (this->flash_work_offset_ * 10) /
-                                    this->flash_image_size_));
+      this->radio_flash_progress_.load(std::memory_order_acquire));
+}
+
+const char *ZigbeeFirmwareManager::radio_flash_error_name_(
+    RadioFlashError error) {
+  switch (error) {
+    case RadioFlashError::NONE:
+      return "none";
+    case RadioFlashError::INVALID_IMAGE_SIZE:
+      return "invalid image size";
+    case RadioFlashError::BSL_SYNC_FAILED:
+      return "radio bootloader synchronization failed";
+    case RadioFlashError::BANK_ERASE_FAILED:
+      return "radio erase failed";
+    case RadioFlashError::DOWNLOAD_FAILED:
+      return "radio download initialization failed";
+    case RadioFlashError::STAGING_READ_FAILED:
+      return "staged firmware read failed";
+    case RadioFlashError::SEND_DATA_FAILED:
+      return "radio write failed";
+    case RadioFlashError::CRC_COMMAND_FAILED:
+      return "radio CRC verification command failed";
+    case RadioFlashError::CRC_MISMATCH:
+      return "radio CRC verification mismatch";
+  }
+  return "unknown radio firmware error";
+}
+
+void ZigbeeFirmwareManager::handle_radio_flash_result_() {
+  this->update_radio_flash_status_();
+  const auto &result = this->radio_flash_result_;
+  if (result.bank_erased && this->gateway_ != nullptr &&
+      !this->gateway_->record_local_radio_erase()) {
+    ESP_LOGE(TAG, "Radio bank erase succeeded, but cleared network metadata was not persisted.");
+  }
+  if (result.error != RadioFlashError::NONE) {
+    if (this->gateway_ != nullptr)
+      this->gateway_->finish_local_firmware_update(false);
+    ESP_LOGE(TAG,
+             "Radio firmware update failed: %s, offset=%" PRIu32
+             ", ROM status=0x%02X, elapsed=%" PRIu32 " ms",
+             radio_flash_error_name_(result.error), result.offset,
+             result.rom_status, result.duration_ms);
+    this->fail_firmware_update_(radio_flash_error_name_(result.error));
+    return;
+  }
+
+  ESP_LOGI(TAG,
+           "Radio firmware verified: CRC32=0x%08" PRIX32
+           ", bytes=%" PRIu32 ", elapsed=%" PRIu32 " ms",
+           result.radio_crc, result.offset, result.duration_ms);
+  if (this->gateway_ != nullptr &&
+      !this->gateway_->record_local_firmware_install(
+          this->flash_entry_.version,
+          this->role_display_from_key_(this->flash_entry_.role))) {
+    ESP_LOGE(TAG, "Radio update succeeded, but installed-image metadata was not persisted.");
+  }
+  if (result.bootloader_reset_acknowledged) {
+    ESP_LOGI(TAG, "ROM bootloader reset acknowledged.");
+  } else {
+    ESP_LOGW(TAG,
+             "ROM bootloader reset was not acknowledged; using the hardware reset fallback.");
+  }
+  if (this->gateway_ != nullptr) {
+    this->gateway_->finish_local_firmware_update(
+        result.bootloader_reset_acknowledged);
+  } else {
+    this->finish_firmware_update_();
+  }
 }
 
 void ZigbeeFirmwareManager::update_download_progress_() {
@@ -1154,9 +1331,11 @@ bool ZigbeeFirmwareManager::flash_active_() const {
          this->flash_state_ == FlashState::PREPARING_DOWNLOAD ||
          this->flash_state_ == FlashState::DOWNLOADING ||
          this->flash_state_ == FlashState::CHECKING_DOWNLOAD ||
+         this->flash_state_ == FlashState::ENTERING_BSL ||
          this->flash_state_ == FlashState::ERASING ||
          this->flash_state_ == FlashState::WRITING ||
-         this->flash_state_ == FlashState::VERIFYING;
+         this->flash_state_ == FlashState::VERIFYING ||
+         this->flash_state_ == FlashState::RESTARTING;
 }
 
 void ZigbeeFirmwareManager::publish_flash_progress_(uint8_t progress) {
@@ -1174,31 +1353,23 @@ void ZigbeeFirmwareManager::publish_flash_progress_(uint8_t progress) {
   }
 }
 
-void ZigbeeFirmwareManager::fail_flash_simulation_(const std::string &reason) {
+void ZigbeeFirmwareManager::fail_firmware_update_(const std::string &reason) {
   if (this->staged_image_sha_active_) {
     mbedtls_sha256_free(&this->staged_image_sha_context_);
     this->staged_image_sha_active_ = false;
   }
-  if (this->simulated_write_sha_active_) {
-    mbedtls_sha256_free(&this->simulated_write_sha_context_);
-    this->simulated_write_sha_active_ = false;
-  }
-  if (this->simulated_verify_sha_active_) {
-    mbedtls_sha256_free(&this->simulated_verify_sha_context_);
-    this->simulated_verify_sha_active_ = false;
-  }
   this->flash_state_ = FlashState::FAILED;
   if (this->flash_status_text_sensor_ != nullptr)
     this->flash_status_text_sensor_->publish_state(std::string("Failed: ") + reason);
-  ESP_LOGE(TAG, "Firmware simulation failed: %s", reason.c_str());
+  ESP_LOGE(TAG, "Zigbee firmware update failed: %s", reason.c_str());
 }
 
-void ZigbeeFirmwareManager::finish_flash_simulation_() {
+void ZigbeeFirmwareManager::finish_firmware_update_() {
   this->flash_state_ = FlashState::COMPLETE;
   this->publish_flash_progress_(100);
   if (this->flash_status_text_sensor_ != nullptr)
-    this->flash_status_text_sensor_->publish_state("Complete (simulated)");
-  ESP_LOGI(TAG, "Firmware simulation complete in %" PRIu32 " ms",
+    this->flash_status_text_sensor_->publish_state("Complete");
+  ESP_LOGI(TAG, "Zigbee firmware update complete in %" PRIu32 " ms",
            millis() - this->flash_started_ms_);
 }
 

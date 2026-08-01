@@ -166,6 +166,49 @@ template<size_t N> inline bool copy_zigbee_cache_text(char (&destination)[N], co
   return true;
 }
 
+inline bool record_local_firmware_install(RunningImageCache *cache,
+                                          const char *firmware,
+                                          const char *role) {
+  if (cache == nullptr)
+    return false;
+
+  cache->known = 0;
+  cache->awaiting_observation = 1;
+  cache->mode_cfg = 0;
+  cache->bsl_cfg = 0;
+  std::memset(cache->stack, 0, sizeof(cache->stack));
+  std::memset(cache->active_ieee, 0, sizeof(cache->active_ieee));
+
+  const bool firmware_valid = copy_zigbee_cache_text(cache->firmware, firmware);
+  const bool role_valid = copy_zigbee_cache_text(cache->role, role);
+  if (!firmware_valid || !role_valid) {
+    std::memset(cache->firmware, 0, sizeof(cache->firmware));
+    std::memset(cache->role, 0, sizeof(cache->role));
+    return false;
+  }
+
+  cache->known = RUNNING_IMAGE_FIRMWARE | RUNNING_IMAGE_ROLE;
+  return true;
+}
+
+inline bool mark_network_connection_unknown(NetworkSnapshotCache *cache) {
+  if (cache == nullptr)
+    return false;
+  cache->known &= ~NETWORK_SNAPSHOT_ON_NETWORK;
+  cache->on_network = 0;
+  return true;
+}
+
+inline bool record_local_radio_erase(NetworkSnapshotCache *cache) {
+  if (cache == nullptr)
+    return false;
+  const uint32_t next_generation = cache->generation + 1;
+  initialize_network_snapshot_cache(cache, next_generation);
+  cache->known = NETWORK_SNAPSHOT_ON_NETWORK;
+  cache->on_network = 0;
+  return true;
+}
+
 inline bool valid_physical_identity_cache(const PhysicalIdentityCache &cache) {
   if (cache.magic != PHYSICAL_IDENTITY_CACHE_MAGIC || cache.schema != ZIGBEE_CACHE_SCHEMA ||
       cache.size != sizeof(cache) || cache.chip_family > 2 ||

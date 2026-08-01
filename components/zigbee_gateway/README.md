@@ -95,12 +95,21 @@ Each optional parameter exposes one control:
 `refresh_metadata` is intrusive. It runs only in TCP mode with no connected
 socket and is rejected in both USB modes.
 
-## Firmware catalog and staged-update simulation
+## Firmware catalog and radio update
 
 The optional `firmware_update` block retrieves compatible images from an online
-manifest and provides persistent target selection. The current update action
-downloads and verifies the real image, but simulates the radio erase, write,
-and verification stages without changing the Zigbee radio.
+manifest and provides persistent target selection. Before installation, the
+selected image is downloaded into ESP32 flash and verified by SHA-256. The
+image must exactly match the detected radio flash size.
+
+Installation takes exclusive ownership from TCP or USB Bridged, writes the
+complete image through the TI ROM bootloader, verifies it with the radio's
+CRC32 command, and resets the radio. USB Direct is rejected because the ESP32
+has no UART access in that mode.
+
+The current installer performs a full bank erase. This also erases the radio's
+Zigbee network state. Back up a coordinator before updating it, and expect a
+router to require commissioning again.
 
 Enabling this block requires ESP-IDF and reserves a 768 KiB `zigbee_fw`
 partition in the ESP32 flash. Its entities are independently optional.
@@ -120,9 +129,9 @@ partition in the ESP32 flash. Its entities are independently optional.
 | `target_firmware_role` | Select | Select coordinator or router firmware |
 | `target_firmware_version` | Select | Select an exact compatible catalog build |
 | `refresh_firmware_catalog` | Button | Check the catalog immediately |
-| `simulate_firmware_update` | Button | Download, stage, verify, and simulate installing the selected image |
+| `install_firmware` | Button | Download, stage, verify, and install the selected image |
 | `invalidate_staged_firmware` | Button | Discard the verified staged image |
 | `firmware_catalog_status` | Text sensor | Catalog availability and last check result |
-| `firmware_update_status` | Text sensor | Current or final update-simulation stage |
-| `firmware_update_progress` | Sensor | Combined download and simulation progress |
+| `firmware_update_status` | Text sensor | Current or final update stage |
+| `firmware_update_progress` | Sensor | Combined download and radio-update progress |
 | `firmware_catalog_check_failed` | Binary sensor | Whether the most recent catalog check failed |

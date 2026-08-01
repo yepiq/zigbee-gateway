@@ -92,7 +92,7 @@ CONF_MAX_MANIFEST_SIZE = "max_manifest_size"
 CONF_TARGET_FIRMWARE_ROLE = "target_firmware_role"
 CONF_TARGET_FIRMWARE_VERSION = "target_firmware_version"
 CONF_REFRESH_FIRMWARE_CATALOG = "refresh_firmware_catalog"
-CONF_SIMULATE_FIRMWARE_UPDATE = "simulate_firmware_update"
+CONF_INSTALL_FIRMWARE = "install_firmware"
 CONF_INVALIDATE_STAGED_FIRMWARE = "invalidate_staged_firmware"
 CONF_FIRMWARE_CATALOG_STATUS = "firmware_catalog_status"
 CONF_FIRMWARE_UPDATE_STATUS = "firmware_update_status"
@@ -145,8 +145,8 @@ FirmwareCatalogRefreshButton = zigbee_gateway_ns.class_(
     button.Button,
     cg.Parented.template(ZigbeeFirmwareManager),
 )
-FirmwareUpdateSimulationButton = zigbee_gateway_ns.class_(
-    "FirmwareUpdateSimulationButton",
+FirmwareInstallButton = zigbee_gateway_ns.class_(
+    "FirmwareInstallButton",
     button.Button,
     cg.Parented.template(ZigbeeFirmwareManager),
 )
@@ -180,8 +180,8 @@ FIRMWARE_UPDATE_SCHEMA = cv.Schema(
             entity_category=ENTITY_CATEGORY_CONFIG,
             icon="mdi:refresh",
         ),
-        cv.Optional(CONF_SIMULATE_FIRMWARE_UPDATE): button.button_schema(
-            FirmwareUpdateSimulationButton,
+        cv.Optional(CONF_INSTALL_FIRMWARE): button.button_schema(
+            FirmwareInstallButton,
             entity_category=ENTITY_CATEGORY_CONFIG,
             icon="mdi:progress-wrench",
         ),
@@ -484,6 +484,7 @@ async def to_code(config):
         firmware = cg.new_Pvariable(firmware_config[CONF_ID])
         await cg.register_component(firmware, firmware_config)
         cg.add(var.set_firmware_manager(firmware))
+        cg.add(firmware.set_gateway(var))
         cg.add(firmware.set_manifest_url(firmware_config[CONF_MANIFEST_URL]))
         cg.add(firmware.set_chip(firmware_config[CONF_CHIP]))
         cg.add(
@@ -530,7 +531,7 @@ async def to_code(config):
 
         firmware_buttons = (
             CONF_REFRESH_FIRMWARE_CATALOG,
-            CONF_SIMULATE_FIRMWARE_UPDATE,
+            CONF_INSTALL_FIRMWARE,
             CONF_INVALIDATE_STAGED_FIRMWARE,
         )
         for key in firmware_buttons:

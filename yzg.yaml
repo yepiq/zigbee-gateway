@@ -23,8 +23,8 @@ substitutions:
   firmware_catalog_startup_timeout: 20s
   firmware_catalog_http_timeout: 15s
   firmware_catalog_max_manifest_size: 64kB
-  firmware_catalog_refresh_hour: "4"
-  firmware_catalog_refresh_minute: "0"
+  firmware_catalog_refresh_hour: '4'
+  firmware_catalog_refresh_minute: '0'
   firmware_catalog_refresh_days: MON-SUN
 
   # Physical mode button and USB Direct selector
@@ -207,7 +207,7 @@ zigbee_gateway:
     inverted: ${led_red_inverted}
     ignore_strapping_warning: ${led_red_strapping}
 
-  # Firmware catalog, persistent target, and staged update simulation
+  # Firmware catalog, persistent target, and radio update
   firmware_update:
     id: zigbee_firmware_manager
     manifest_url: ${firmware_catalog_url}
@@ -229,12 +229,11 @@ zigbee_gateway:
     refresh_firmware_catalog:
       name: Refresh Firmware Catalog
 
-    # Exercises download, staging, erase, write, and verification without
-    # changing the Zigbee coprocessor.
-    simulate_firmware_update:
-      name: Simulate Zigbee Firmware Update
+    # Downloads, verifies, and installs the selected Zigbee firmware.
+    install_firmware:
+      name: Install Zigbee Firmware
 
-    # Discards the downloaded image so the next simulation downloads it again.
+    # Discards the downloaded image so the next update downloads it again.
     invalidate_staged_firmware:
       name: Clear Staged Zigbee Firmware
 
@@ -242,11 +241,11 @@ zigbee_gateway:
     firmware_catalog_status:
       name: Firmware Catalog Status
 
-    # Current stage or final result of the simulated firmware update.
+    # Current stage or final result of the firmware update.
     firmware_update_status:
       name: Firmware Update Status
 
-    # Combined download, staging, and simulated radio-operation progress.
+    # Combined download, staging, and radio-operation progress.
     firmware_update_progress:
       name: Firmware Update Progress
 

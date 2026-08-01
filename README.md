@@ -109,8 +109,8 @@ YZG exposes these controls in Home Assistant and its web interface:
 | **Target Firmware Role** | Chooses coordinator or router firmware |
 | **Target Firmware Version** | Chooses a compatible build from the current online catalog |
 | **Refresh Firmware Catalog** | Checks the catalog immediately instead of waiting for the scheduled check |
-| **Simulate Zigbee Firmware Update** | Downloads and verifies the selected image, then tests the update workflow without changing the TI radio |
-| **Clear Staged Zigbee Firmware** | Discards the downloaded image so the next simulation downloads it again |
+| **Install Zigbee Firmware** | Downloads, verifies, and installs the selected image on the TI radio |
+| **Clear Staged Zigbee Firmware** | Discards the downloaded image so the next update downloads it again |
 
 Refreshing Zigbee information temporarily uses the radio connection. YZG allows
 it only in TCP mode while Zigbee2MQTT is disconnected.
@@ -132,14 +132,18 @@ YZG retrieves the compatible CC2652P7 coordinator and router builds from the
 XZG firmware catalog. It checks the catalog at startup and on schedule, and
 keeps the target role and exact selected build across ESP32 restarts.
 
-The built-in update workflow is currently a simulation. It downloads the real
-selected image, stores it on the ESP32, verifies its SHA-256, and exercises the
-remaining update stages without writing to or resetting the TI radio. A
-verified download is reused when the same selected image is still current.
+The built-in updater stores the selected image on the ESP32, verifies its
+SHA-256, writes the complete image through the TI ROM bootloader, and verifies
+the radio with CRC32 before resetting it. A verified download is reused when
+the same selected image is still current. Installation is available in TCP and
+USB Bridged modes; USB Direct has no ESP32-to-radio data path.
 
-Actual TI radio updates currently require an external firmware-update tool.
-YZG supports ZigStarGW-MT and XZG-MT-style firmware-update tools over TCP and
-USB.
+The current installer performs a full radio bank erase, including Zigbee
+network state. Back up a coordinator before updating it, and expect a router to
+require commissioning again.
+
+YZG also supports ZigStarGW-MT and XZG-MT-style external firmware-update tools
+over TCP and USB.
 
 When updating over TCP, Zigbee2MQTT continues running until the update tool is
 ready. YZG then gives the tool exclusive access to the radio. After the update,

@@ -47,6 +47,15 @@ int main() {
                  RUNNING_IMAGE_ACTIVE_IEEE | RUNNING_IMAGE_ROLE;
   assert(valid_running_image_cache(image));
 
+  assert(record_local_firmware_install(&image, "20250403", "Router"));
+  assert(valid_running_image_cache(image));
+  assert(image.awaiting_observation == 1);
+  assert(image.known == (RUNNING_IMAGE_FIRMWARE | RUNNING_IMAGE_ROLE));
+  assert(std::strcmp(image.firmware, "20250403") == 0);
+  assert(std::strcmp(image.role, "Router") == 0);
+  assert(image.stack[0] == '\0');
+  assert(image.active_ieee[0] == '\0');
+
   network.pan_id = 0x1A62;
   network.channel = 15;
   network.on_network = 1;
@@ -56,6 +65,22 @@ int main() {
                   NETWORK_SNAPSHOT_ON_NETWORK | NETWORK_SNAPSHOT_PARENT_IEEE |
                   NETWORK_SNAPSHOT_EXTENDED_PAN_ID;
   assert(valid_network_snapshot_cache(network));
+
+  assert(mark_network_connection_unknown(&network));
+  assert((network.known & NETWORK_SNAPSHOT_ON_NETWORK) == 0);
+  assert(network.on_network == 0);
+  assert((network.known & NETWORK_SNAPSHOT_PAN_ID) != 0);
+  assert(valid_network_snapshot_cache(network));
+
+  const uint32_t pre_erase_generation = network.generation;
+  assert(record_local_radio_erase(&network));
+  assert(network.generation == pre_erase_generation + 1);
+  assert(network.known == NETWORK_SNAPSHOT_ON_NETWORK);
+  assert(network.on_network == 0);
+  assert(network.parent_ieee[0] == '\0');
+  assert(network.extended_pan_id[0] == '\0');
+  assert(valid_network_snapshot_cache(network));
+
   network.on_network = 2;
   assert(!valid_network_snapshot_cache(network));
   network.on_network = 1;
@@ -95,6 +120,8 @@ int main() {
   too_long[sizeof(too_long) - 1] = '\0';
   assert(!copy_zigbee_cache_text(image.firmware, too_long));
   assert(image.firmware[0] == '\0');
+  assert(!record_local_firmware_install(&image, too_long, "Router"));
+  assert(image.known == 0);
 
   return 0;
 }
