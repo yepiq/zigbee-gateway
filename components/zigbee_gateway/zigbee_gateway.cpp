@@ -29,6 +29,11 @@ static const char *const TAG = "zigbee_gateway";
 static constexpr uint32_t RESET_IND_TIMEOUT_MS = 5000;
 static constexpr uint32_t RESET_PARSER_START_TIMEOUT_MS = 20;
 static constexpr uint32_t ROUTER_RESET_SETTLE_MS = 100;
+static constexpr uint32_t ROUTER_FACTORY_RESET_PULSE_MS = 250;
+// Koenkk's Router firmware waits two seconds after the button event before it
+// clears startup state and resets. Keep local operations blocked through that
+// delay and the following application startup.
+static constexpr uint32_t ROUTER_FACTORY_RESET_SETTLE_MS = 3000;
 static constexpr uint32_t USB_BRIDGE_BSL_BAUD_RATE = 500000;
 static constexpr uint32_t LOCAL_FLASH_HARD_RESET_PULSE_MS = 50;
 static constexpr uint32_t LOCAL_FLASH_APPLICATION_SETTLE_MS = 500;
@@ -1180,12 +1185,15 @@ void ZigbeeGatewayComponent::request_router_factory_reset_() {
   ESP_LOGI(TAG, "Requesting Zigbee router factory reset and pairing mode.");
   this->operation_active_ = true;
   this->bsl_pin_->digital_write(true);
-  this->set_timeout("zigbee_router_factory_reset_release", 250, [this]() {
+  this->set_timeout("zigbee_router_factory_reset_release",
+                    ROUTER_FACTORY_RESET_PULSE_MS, [this]() {
     this->bsl_pin_->digital_write(false);
-    this->set_timeout("zigbee_router_factory_reset_settle", 500, [this]() {
-      this->operation_active_ = false;
-      ESP_LOGI(TAG, "Zigbee router factory reset pulse complete.");
-    });
+    this->set_timeout("zigbee_router_factory_reset_settle",
+                      ROUTER_FACTORY_RESET_SETTLE_MS, [this]() {
+                        this->operation_active_ = false;
+                        ESP_LOGI(TAG,
+                                 "Zigbee router factory reset window complete.");
+                      });
   });
 }
 
