@@ -57,8 +57,6 @@ maintenance window and a recovery method.
   conversions with the relevant controller backup and commissioning window.
 - `HW-01` through `HW-03`: observe all three physical LEDs through their TCP,
   USB, and connection-state transitions.
-- Confirm in Zigbee2MQTT that the Router remains live after the non-erasing BSL
-  information refresh performed on 2026-08-01.
 
 ## Baseline and diagnostics
 
@@ -221,6 +219,12 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
   3778 ms, recovered Router role and the complete NV network snapshot, decoded
   CCFG in little-endian order, reset through the Router settle path, and
   published metadata `Verified` and network information `Refreshed`.
+
+  A final commissioned-Router retest completed in 3649 ms. It recovered Router
+  `20250403`, channel 11, PAN ID `0x6D7E`, parent and extended PAN identifiers,
+  and `on_network=YES`, then reset the radio without erasing NV. Zigbee2MQTT
+  confirmed the Router remained alive without permit-join, an extra reset, or
+  a gateway power cycle.
 
 ### CACHE-10 — Router refresh completes without Coordinator reset wait
 
