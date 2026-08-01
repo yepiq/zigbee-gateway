@@ -1,4 +1,5 @@
 #include "zigbee_gateway.h"
+#include "zigbee_reset_policy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,7 @@ static const char *const TAG = "zigbee_gateway";
 // policy.
 static constexpr uint32_t RESET_IND_TIMEOUT_MS = 5000;
 static constexpr uint32_t RESET_PARSER_START_TIMEOUT_MS = 20;
+static constexpr uint32_t ROUTER_RESET_SETTLE_MS = 100;
 static constexpr uint32_t USB_BRIDGE_BSL_BAUD_RATE = 500000;
 
 void ZigbeeTransportSelect::setup() {
@@ -795,12 +797,18 @@ void ZigbeeGatewayComponent::restart_blocking_() {
   delay(15);
   this->reset_pin_->digital_write(false);
 
-  const bool reset_ind_seen = this->wait_for_reset_ind_blocking_();
-  if (reset_ind_seen)
-    ESP_LOGD(TAG, "SYS_RESET_IND received");
-  else
-    ESP_LOGW(TAG, "SYS_RESET_IND was not received before the %u ms timeout",
-             (unsigned) RESET_IND_TIMEOUT_MS);
+  if (zigbee_reset_completion_policy(this->role_) ==
+      ZigbeeResetCompletionPolicy::SETTLE_ONLY) {
+    delay(ROUTER_RESET_SETTLE_MS);
+    ESP_LOGD(TAG, "Router reset settled without waiting for SYS_RESET_IND");
+  } else {
+    const bool reset_ind_seen = this->wait_for_reset_ind_blocking_();
+    if (reset_ind_seen)
+      ESP_LOGD(TAG, "SYS_RESET_IND received");
+    else
+      ESP_LOGW(TAG, "SYS_RESET_IND was not received before the %u ms timeout",
+               (unsigned) RESET_IND_TIMEOUT_MS);
+  }
 
   ESP_LOGI(TAG, "Zigbee module has been reset.");
   this->run_post_reset_diagnostics_();
@@ -887,6 +895,12 @@ void ZigbeeGatewayComponent::request_restart_() {
   this->reset_pin_->digital_write(true);
   this->set_timeout("zigbee_reset_release", 15, [this]() {
     this->reset_pin_->digital_write(false);
+    if (zigbee_reset_completion_policy(this->role_) ==
+        ZigbeeResetCompletionPolicy::SETTLE_ONLY) {
+      this->set_timeout("zigbee_router_reset_settle", ROUTER_RESET_SETTLE_MS,
+                        [this]() { this->finish_async_restart_(false); });
+      return;
+    }
     this->async_reset_active_ = true;
     this->async_reset_started_ms_ = millis();
     this->reset_parser_state_ = ResetParserState::SEEK_SOF;
@@ -941,7 +955,9 @@ void ZigbeeGatewayComponent::process_async_reset_() {
 
 void ZigbeeGatewayComponent::finish_async_restart_(bool reset_ind_seen) {
   this->async_reset_active_ = false;
-  if (!reset_ind_seen)
+  if (!reset_ind_seen &&
+      zigbee_reset_completion_policy(this->role_) ==
+          ZigbeeResetCompletionPolicy::WAIT_FOR_ZNP_RESET_IND)
     ESP_LOGW(TAG, "SYS_RESET_IND was not received before the %u ms timeout",
              (unsigned) RESET_IND_TIMEOUT_MS);
   ESP_LOGI(TAG, "Zigbee module has been reset.");
