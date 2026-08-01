@@ -3,4 +3,4 @@ substitutions:
   zigbee_gateway_source: github://yepiq/zigbee-gateway@main
 
 packages:
-  yzg: github://yepiq/zigbee-gateway/yzg.yaml@main
+  yzg: !include yzg.yaml
