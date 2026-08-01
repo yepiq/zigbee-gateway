@@ -104,9 +104,9 @@ image must exactly match the detected radio flash size and retain a usable TI
 ROM bootloader configuration for the device wiring.
 
 Installation takes exclusive ownership from TCP or USB Bridged, writes the
-complete image through the TI ROM bootloader, verifies it with the radio's
-CRC32 command, and resets the radio. USB Direct is rejected because the ESP32
-has no UART access in that mode.
+complete image through the TI ROM bootloader, has the ROM verify the expected
+CRC32 as the image is committed, and resets the radio. USB Direct is rejected
+because the ESP32 has no UART access in that mode.
 
 The current installer performs a full bank erase. This also erases the radio's
 Zigbee network state. Back up a coordinator before updating it, and expect a

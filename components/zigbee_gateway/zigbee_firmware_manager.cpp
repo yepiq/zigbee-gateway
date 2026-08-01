@@ -32,7 +32,7 @@ static constexpr uint32_t RADIO_BSL_PAYLOAD_TIMEOUT_MS = 250;
 static constexpr uint32_t RADIO_BSL_ERASE_ACK_TIMEOUT_MS = 15000;
 static constexpr uint32_t RADIO_BSL_DOWNLOAD_ACK_TIMEOUT_MS = 2000;
 static constexpr uint32_t RADIO_BSL_DATA_ACK_TIMEOUT_MS = 5000;
-static constexpr uint32_t RADIO_BSL_CRC_ACK_TIMEOUT_MS = 5000;
+static constexpr uint32_t RADIO_BSL_FINAL_DATA_ACK_TIMEOUT_MS = 15000;
 static constexpr uint32_t RADIO_BSL_RESET_ACK_TIMEOUT_MS = 1000;
 static constexpr uint32_t RADIO_FLASH_START_ADDRESS = 0;
 static constexpr size_t RADIO_FLASH_TASK_STACK_SIZE = 8192;
@@ -1070,12 +1070,13 @@ void ZigbeeFirmwareManager::radio_flash_task_() {
   this->radio_flash_result_.bank_erased = true;
   this->radio_flash_progress_.store(45, std::memory_order_release);
 
-  if (!bsl_download(serial, RADIO_FLASH_START_ADDRESS,
-                    static_cast<uint32_t>(this->flash_image_size_),
-                    RADIO_BSL_DOWNLOAD_ACK_TIMEOUT_MS,
-                    RADIO_BSL_STATUS_ACK_TIMEOUT_MS,
-                    RADIO_BSL_HEADER_TIMEOUT_MS,
-                    RADIO_BSL_PAYLOAD_TIMEOUT_MS, &rom_status)) {
+  if (!bsl_download_crc(serial, RADIO_FLASH_START_ADDRESS,
+                        static_cast<uint32_t>(this->flash_image_size_),
+                        this->flash_image_crc_,
+                        RADIO_BSL_DOWNLOAD_ACK_TIMEOUT_MS,
+                        RADIO_BSL_STATUS_ACK_TIMEOUT_MS,
+                        RADIO_BSL_HEADER_TIMEOUT_MS,
+                        RADIO_BSL_PAYLOAD_TIMEOUT_MS, &rom_status)) {
     finish(RadioFlashError::DOWNLOAD_FAILED, rom_status, 0);
     return;
   }
@@ -1093,8 +1094,17 @@ void ZigbeeFirmwareManager::radio_flash_task_() {
              static_cast<uint32_t>(offset));
       return;
     }
+    const bool final_block = offset + length == this->flash_image_size_;
+    if (final_block) {
+      // DOWNLOAD_CRC makes the final SEND_DATA perform the ROM-side check.
+      // The response can therefore take longer than an ordinary data block.
+      this->radio_flash_stage_.store(RadioFlashStage::VERIFYING,
+                                     std::memory_order_release);
+      this->radio_flash_progress_.store(95, std::memory_order_release);
+    }
     if (!bsl_send_data(serial, buffer, static_cast<uint8_t>(length),
-                       RADIO_BSL_DATA_ACK_TIMEOUT_MS,
+                       final_block ? RADIO_BSL_FINAL_DATA_ACK_TIMEOUT_MS
+                                   : RADIO_BSL_DATA_ACK_TIMEOUT_MS,
                        RADIO_BSL_STATUS_ACK_TIMEOUT_MS,
                        RADIO_BSL_HEADER_TIMEOUT_MS,
                        RADIO_BSL_PAYLOAD_TIMEOUT_MS, &rom_status)) {
@@ -1110,26 +1120,12 @@ void ZigbeeFirmwareManager::radio_flash_task_() {
     vTaskDelay(1);
   }
   this->radio_flash_result_.local_crc = crc ^ 0xFFFFFFFFUL;
-
-  this->radio_flash_stage_.store(RadioFlashStage::VERIFYING,
-                                 std::memory_order_release);
-  this->radio_flash_progress_.store(95, std::memory_order_release);
-  uint32_t radio_crc = 0;
-  if (!bsl_crc32(serial, RADIO_FLASH_START_ADDRESS,
-                 static_cast<uint32_t>(this->flash_image_size_),
-                 RADIO_BSL_CRC_ACK_TIMEOUT_MS, RADIO_BSL_HEADER_TIMEOUT_MS,
-                 RADIO_BSL_PAYLOAD_TIMEOUT_MS,
-                 RADIO_BSL_STATUS_ACK_TIMEOUT_MS, &radio_crc, &rom_status)) {
-    finish(RadioFlashError::CRC_COMMAND_FAILED, rom_status,
+  if (this->radio_flash_result_.local_crc != this->flash_image_crc_) {
+    finish(RadioFlashError::STAGING_CRC_MISMATCH, 0,
            static_cast<uint32_t>(this->flash_image_size_));
     return;
   }
-  this->radio_flash_result_.radio_crc = radio_crc;
-  if (radio_crc != this->radio_flash_result_.local_crc) {
-    finish(RadioFlashError::CRC_MISMATCH, 0,
-           static_cast<uint32_t>(this->flash_image_size_));
-    return;
-  }
+  this->radio_flash_result_.verified_crc = this->flash_image_crc_;
 
   this->radio_flash_stage_.store(RadioFlashStage::RESTARTING,
                                  std::memory_order_release);
@@ -1198,10 +1194,8 @@ const char *ZigbeeFirmwareManager::radio_flash_error_name_(
       return "staged firmware read failed";
     case RadioFlashError::SEND_DATA_FAILED:
       return "radio write failed";
-    case RadioFlashError::CRC_COMMAND_FAILED:
-      return "radio CRC verification command failed";
-    case RadioFlashError::CRC_MISMATCH:
-      return "radio CRC verification mismatch";
+    case RadioFlashError::STAGING_CRC_MISMATCH:
+      return "staged firmware changed during radio write";
   }
   return "unknown radio firmware error";
 }
@@ -1226,9 +1220,9 @@ void ZigbeeFirmwareManager::handle_radio_flash_result_() {
   }
 
   ESP_LOGI(TAG,
-           "Radio firmware verified: CRC32=0x%08" PRIX32
+           "Radio firmware verified by TI ROM: CRC32=0x%08" PRIX32
            ", bytes=%" PRIu32 ", elapsed=%" PRIu32 " ms",
-           result.radio_crc, result.offset, result.duration_ms);
+           result.verified_crc, result.offset, result.duration_ms);
   if (this->gateway_ != nullptr &&
       !this->gateway_->record_local_firmware_install(
           this->flash_entry_.version,

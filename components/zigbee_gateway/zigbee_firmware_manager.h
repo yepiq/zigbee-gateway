@@ -94,7 +94,7 @@ class ZigbeeFirmwareManager : public Component {
   static constexpr uint16_t STAGING_SCHEMA = 2;
   static_assert(STAGING_HEADER_SIZE + MAX_FIRMWARE_IMAGE_SIZE <= STAGING_PARTITION_SIZE);
   static_assert(STAGING_PARTITION_SIZE % STAGING_HEADER_SIZE == 0);
-  static constexpr size_t WRITE_BLOCK_SIZE = 248;
+  static constexpr size_t WRITE_BLOCK_SIZE = 252;
 
   struct FirmwareEntry {
     std::string role;
@@ -206,8 +206,7 @@ class ZigbeeFirmwareManager : public Component {
     DOWNLOAD_FAILED,
     STAGING_READ_FAILED,
     SEND_DATA_FAILED,
-    CRC_COMMAND_FAILED,
-    CRC_MISMATCH,
+    STAGING_CRC_MISMATCH,
   };
 
   struct RadioFlashResult {
@@ -217,7 +216,7 @@ class ZigbeeFirmwareManager : public Component {
     uint8_t rom_status{0};
     uint32_t offset{0};
     uint32_t local_crc{0};
-    uint32_t radio_crc{0};
+    uint32_t verified_crc{0};
     uint32_t duration_ms{0};
   };
 
