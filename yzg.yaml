@@ -397,6 +397,7 @@ button:
   - platform: restart
     name: Restart ESP32
     id: restart_esp32
+    icon: ""
     entity_category: config
 
 binary_sensor:
@@ -434,6 +435,7 @@ sensor:
     id: mcu_uptime
     time_id: ha_time
     device_class: uptime
+    icon: ""
     entity_category: diagnostic
 
 text_sensor:

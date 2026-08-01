@@ -18,9 +18,9 @@ from esphome.const import (
     DEVICE_CLASS_PROBLEM,
     DEVICE_CLASS_RESTART,
     DEVICE_CLASS_SIGNAL_STRENGTH,
+    DEVICE_CLASS_UPDATE,
     ENTITY_CATEGORY_CONFIG,
     ENTITY_CATEGORY_DIAGNOSTIC,
-    ICON_RESTART,
     STATE_CLASS_MEASUREMENT,
     STATE_CLASS_TOTAL_INCREASING,
     UNIT_BYTES,
@@ -181,13 +181,13 @@ FIRMWARE_UPDATE_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_REFRESH_FIRMWARE_CATALOG): button.button_schema(
             FirmwareCatalogRefreshButton,
+            device_class=DEVICE_CLASS_UPDATE,
             entity_category=ENTITY_CATEGORY_CONFIG,
-            icon="mdi:refresh",
         ),
         cv.Optional(CONF_INSTALL_FIRMWARE): button.button_schema(
             FirmwareInstallButton,
+            device_class=DEVICE_CLASS_UPDATE,
             entity_category=ENTITY_CATEGORY_CONFIG,
-            icon="mdi:progress-wrench",
         ),
         cv.Optional(CONF_INVALIDATE_STAGED_FIRMWARE): button.button_schema(
             StagedFirmwareInvalidateButton,
@@ -214,7 +214,6 @@ FIRMWARE_UPDATE_SCHEMA = cv.Schema(
         ): binary_sensor.binary_sensor_schema(
             device_class=DEVICE_CLASS_PROBLEM,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-            icon="mdi:cloud-alert",
         ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
@@ -296,14 +295,12 @@ CONFIG_SCHEMA = cv.All(
                 unit_of_measurement=UNIT_BYTES,
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_MEASUREMENT,
-                icon="mdi:memory",
             ),
             cv.Optional(CONF_TX_POWER): sensor.sensor_schema(
                 device_class=DEVICE_CLASS_SIGNAL_STRENGTH,
                 unit_of_measurement=UNIT_DECIBEL_MILLIWATT,
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_MEASUREMENT,
-                icon="mdi:access-point",
             ),
             cv.Optional(CONF_PAN_ID): sensor.sensor_schema(
                 accuracy_decimals=0,
@@ -352,7 +349,6 @@ CONFIG_SCHEMA = cv.All(
                 RadioRestartButton,
                 device_class=DEVICE_CLASS_RESTART,
                 entity_category=ENTITY_CATEGORY_CONFIG,
-                icon=ICON_RESTART,
             ),
             cv.Optional(CONF_ENTER_BSL): button.button_schema(
                 RadioBslButton,
@@ -366,8 +362,8 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_REFRESH_METADATA): button.button_schema(
                 RadioMetadataRefreshButton,
+                device_class=DEVICE_CLASS_UPDATE,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-                icon="mdi:refresh",
             ),
             cv.Optional(CONF_FIRMWARE_UPDATE): FIRMWARE_UPDATE_SCHEMA,
         }
