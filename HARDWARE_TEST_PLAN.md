@@ -112,11 +112,15 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
 
 ### GEO-03 — CC13x2x7/CC26x2x7 identification
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: On a supported x7 radio with an empty physical-identity cache,
   capture the family, flash-capacity, CCFG-address, and NV-region logs.
 - Expected: The family is x2x7; total flash is the register count multiplied by
   8 KiB; CCFG addresses are derived from that total; NV scanning uses base
+  `0xA6000`, size `0x8000`, and page size `0x2000`.
+- Evidence: On 2026-08-01, firmware based on gateway commit `6b35e90`
+  identified the UZG-01 radio as `cc13x2x7_cc26x2x7` / `CC2652P7`, read 88
+  flash units of 8192 bytes for 720896 bytes total, and selected NV base
   `0xA6000`, size `0x8000`, and page size `0x2000`.
 
 ### GEO-04 — Unknown-family safety
@@ -151,12 +155,34 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
 
 ### CACHE-03 — Manual refresh while idle
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: Stop Zigbee2MQTT and press the Refresh Zigbee Information
   diagnostic button.
 - Expected: The component exclusively claims UART, marks the record dirty,
   identifies BSL/NV/ZNP information, resets the radio, saves the next clean
   generation, reports `Verified`, and releases UART for the next TCP client.
+- Evidence: On 2026-08-01, the fixed working-tree build entered BSL, identified
+  the CC2652P7 and its NV data, reset the Router, saved physical/image/network
+  generation `1/3/3`, published metadata `Verified` and network information
+  `Refreshed`, and returned the TCP transport to idle.
+
+### CACHE-10 — Router refresh completes without Coordinator reset wait
+
+- Status: `PASS`
+- Procedure: With the cached or freshly detected role known to be Router, run
+  Refresh Zigbee Information and capture the interval from the radio reset to
+  completion.
+- Expected: The radio is reset out of BSL without waiting for a
+  Coordinator-only ZNP reset indication. The refresh produces no UART timeout
+  errors and promptly releases ownership after the Router-specific settle
+  period.
+- Evidence: On 2026-08-01, firmware based on gateway commit `6b35e90` knew the
+  role was Router before reset, but waited the full 5000 ms for
+  `SYS_RESET_IND`, emitted repeated `Reading from UART timed out at byte 0`
+  errors, and reported a 6853 ms component operation before skipping ZNP
+  routines. With the subsequent working-tree fix, reset started at 11:01:43.340
+  and the Router settle path completed at 11:01:43.456 without UART timeout
+  errors or a missing-`SYS_RESET_IND` warning.
 
 ### CACHE-04 — BSL maintenance defers refresh to normal traffic
 
@@ -587,14 +613,19 @@ category.
 
 ### STAGE-01 — Real image staging and simulated radio update
 
-- Status: `NOT RUN`
-- Procedure: On the UZG-01, select one coordinator image and press **Simulate
+- Status: `PASS`
+- Procedure: On the UZG-01, select one compatible image and press **Simulate
   Zigbee Firmware Update** while capturing logs.
 - Expected: The compatible raw image is downloaded directly into the 768 KiB
   `zigbee_fw` partition, read back with the same SHA-256, and marked ready.
   Simulated erase, write, and verification remain cooperative and consume the
   exact staged bytes. No radio UART bytes or radio control-pin changes occur,
   and progress reaches 100%.
+- Evidence: On 2026-08-01, Router build `20250403` downloaded 720896 bytes in
+  10837 ms. The staged readback, simulated write, and simulated verification
+  all produced SHA-256
+  `832db3da669ee1371084cc3256fb34aed4f0a2642a5b915bbb0188a8e469cabb`;
+  progress reached 100% and the simulation completed in 108563 ms.
 
 ### STAGE-02 — Interrupted download remains invalid
 
@@ -608,31 +639,44 @@ category.
 
 ### STAGE-03 — Completed staged image survives reboot
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: Complete STAGE-01, reboot without starting another download, and
   retain the startup log.
 - Expected: Boot reports the staged role, version, filename, image size, and
   ETag and SHA-256 from the verified header. The catalog remains limited to
   Zigbee coordinator and router images.
+- Evidence: After the successful 2026-08-01 staging run and an ESP32 reboot,
+  the live device reported `Staged: router 20250403`; the exact target restored
+  as Router / `20250403`, and the catalog continued to expose only Coordinator
+  and Router roles.
 
 ### STAGE-04 — Update-path responsiveness
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: During staging and every simulated radio phase, repeatedly read
   native API entities and capture watchdog/component-blocking warnings.
 - Expected: Home Assistant and logging remain responsive. Work advances in
   bounded chunks without an ESPHome watchdog reset. Repeat this test with
   stricter timing expectations when simulated UART operations are replaced by
   slower acknowledged BSL commands.
+- Evidence: Throughout the 108563 ms simulation on 2026-08-01, HA received
+  status and progress updates through every stage and the ESP32 remained
+  responsive without a watchdog reset. One isolated API operation took 51 ms;
+  no sustained event-loop stall was observed.
 
 ### STAGE-05 — Current staged image is reused
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: Complete STAGE-01, keep the same role and version selected, then
   run the simulation again with normal Internet access.
 - Expected: A conditional HEAD request returns 304. The staged payload is read
   back and its SHA-256 verified before the simulated radio operations start;
   the firmware body is not downloaded again.
+- Evidence: On 2026-08-01, the second Router `20250403` simulation received
+  HTTP 304 in 594 ms, reused the staged image without a replacement download,
+  and verified SHA-256
+  `832db3da669ee1371084cc3256fb34aed4f0a2642a5b915bbb0188a8e469cabb`
+  before completing the simulated radio phases.
 
 ### STAGE-06 — Freshness-check failure falls back to verified staging
 
@@ -701,13 +745,16 @@ category.
 
 ### TARGET-01 — Exact target selection survives restart
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: Select a firmware role and version, note the exact catalog
   filename from the log, press **Restart ESP32**, and observe both selects
   after HA reconnects.
 - Expected: The saved role, version, and exact filename are restored after the
   catalog is available. Restarting does not download, invalidate, or otherwise
   modify the staged firmware image.
+- Evidence: On 2026-08-01, the saved target was Router / `20250403` /
+  `CC1352P7_router_20250403.bin`. After reboot, the live selects restored Router
+  / `20250403`, and the existing staged image remained available.
 
 ### TARGET-02 — Missing saved build is not substituted
 
@@ -729,6 +776,22 @@ category.
 - Expected: On the first upgraded boot, the staged role, version, and filename
   become the initial saved target. Subsequent boots restore the preference
   directly; later staged-image changes do not overwrite user target intent.
+
+### TARGET-04 — Current-radio-role fallback
+
+- Status: `PASS`
+- Procedure: Start without a saved target selection or verified staged image,
+  but with the current radio role available from restored or refreshed Zigbee
+  metadata. Reboot and observe both target selects after the catalog loads.
+- Expected: Target Firmware Role follows the current radio role. Target
+  Firmware Version reports `Select firmware...` because knowing the installed
+  role does not imply knowing its exact catalog build. If the current role is
+  unknown or unavailable in the catalog, the configured preferred role is
+  used instead.
+- Evidence: On 2026-08-01, the fixed working-tree build reported the current
+  Zigbee role as `Router`; its live web state exposed Target Firmware Role as
+  `Router` and Target Firmware Version as `Select firmware...` while no staged
+  image was present.
 
 ### FW-01 — Coordinator upgrade
 
@@ -805,15 +868,26 @@ category.
   address/port.
 - Expected: Port, radio type, and baud-rate metadata match the active server.
 
-### HW-05 — Router factory-reset pulse
+### HW-05 — Router factory reset and recommissioning
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: With known compatible router firmware, invoke Factory Reset
   Zigbee Router, enable joining on the coordinator, and recommission the radio.
-  Repeat while the radio role is known to be Coordinator.
 - Expected: The router leaves its former network, clears its saved network
-  association, restarts, and enters pairing. In Coordinator role the component
-  skips the operation and does not pulse the configuration pin.
+  association, restarts, and enters pairing.
+- Evidence: On 2026-08-01, firmware based on gateway commit `6b35e90` logged
+  `Requesting Zigbee router factory reset and pairing mode` at 10:38:13 and
+  `Zigbee router factory reset pulse complete` at 10:38:14. The router then
+  paired successfully, confirmed by the operator.
+
+### HW-06 — Router factory-reset Coordinator guard
+
+- Status: `NOT RUN`
+- Procedure: With the radio role known to be Coordinator, invoke Factory Reset
+  Zigbee Router while capturing logs and, where practical, the configuration
+  pin level.
+- Expected: The component reports that the operation only applies to Router
+  firmware, skips it, and does not pulse the configuration pin.
 
 ## References
 
