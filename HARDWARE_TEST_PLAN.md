@@ -47,6 +47,8 @@ maintenance window and a recovery method.
 - `TCP-01` through `TCP-06` and `CACHE-07`: exercise a real Zigbee2MQTT owner,
   including reconnects, pending sockets, refresh refusal, ordinary traffic, and
   the long-running stability check.
+- `TCP-07`: repeat the control-plane socket-pressure case after adjusting the
+  available socket budget.
 - `MNT-01` through `MNT-10`: exercise the legacy ZigStarGW-MT and current XZG-MT
   command-first/connection-first maintenance workflows against a real normal
   client.
@@ -83,7 +85,7 @@ maintenance window and a recovery method.
 
 ### BAS-03 — Diagnostic entity consistency
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Compare published hardware, flash size, firmware, role, IEEE,
   network state, PAN ID, channel, parent IEEE, and extended PAN ID with the
   radio firmware and Zigbee2MQTT information.
@@ -93,6 +95,13 @@ maintenance window and a recovery method.
   `Awaiting Observation`, or `Unavailable`. Zigbee Network Information Status
   accurately reports `Cached`, `Cleared`, `Observed`, `Refreshed`, or
   `Unavailable`.
+- Evidence: On 2026-08-01, the development UZG-01 reported CC2652P7, 720896
+  bytes of flash, Router firmware `20250403`, factory IEEE
+  `00:12:4B:00:2E:0C:CF:EC`, PAN ID `28030`, channel `11`, joined state, parent
+  `00:12:4B:00:2E:0C:C9:37`, Metadata Status `Restored`, and Network
+  Information Status `Cached`. Stack, active IEEE, and TX power remained
+  unknown rather than being fabricated. Previously verified radio values agree;
+  repeat the complete comparison against a live Zigbee2MQTT information view.
 
 ### BAS-04 — ESP32 OTA update
 
@@ -182,13 +191,16 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
 
 ### GEO-04 — Unknown-family safety
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: With a development fixture that produces ambiguous family
   detection, run an explicit information refresh.
 - Expected: No fallback `FLASH_SIZE` multiplier, end-of-flash CCFG address, or
   NVOCMP range is used. Identification remains unverified, no partial physical
   cache is committed, the radio is reset out of BSL, and a later refresh may
   retry.
+- Evidence: The host geometry test verifies that an unknown family returns no
+  geometry rather than a default layout. The ambiguous-family hardware path,
+  cache behavior, and recovery reset remain to be exercised.
 
 ## Persistent radio metadata
 
@@ -322,12 +334,15 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
 - Evidence: On 2026-08-01, a silent provisional TCP socket was held on the
   development UZG-01 while the web button was pressed. The gateway logged that
   the refresh was skipped to preserve UART ownership; the socket remained open
-  and the radio was not probed. Repeat with an active Zigbee2MQTT session and
-  verify its traffic remains uninterrupted.
+  and the radio was not probed. A later run classified a synthetic ZNP client
+  as the normal UART owner; pressing the button logged that refresh was skipped,
+  preserved Metadata Status `Restored`, and left maintenance and recovery-reset
+  counters unchanged. Repeat with an active Zigbee2MQTT session and verify its
+  traffic remains uninterrupted.
 
 ### CACHE-08 — Incompatible record is rejected
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Host check: Run `tests/zigbee_metadata_cache_test.cpp`.
 - Hardware procedure: Install a development build with an intentionally newer
   cache schema after first creating a clean record with the preceding schema.
@@ -335,6 +350,9 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
   magic, schema, size, known masks, Boolean domains, and string termination
   checks reject malformed records; hardware boot treats a schema mismatch as
   unavailable and performs the required identification.
+- Evidence: The host cache test rejects zeroed records, schema and size
+  mismatches, invalid known masks and Boolean values, unterminated strings, and
+  overlong strings. The hardware schema-migration path remains to be exercised.
 
 ### CACHE-09 — Persistence scopes invalidate independently
 
@@ -383,12 +401,16 @@ payload boundaries for `SYS_VERSION`, `UTIL_GET_DEVICE_INFO`,
 
 ### OBS-04 — Invalid and out-of-scope frames are ignored
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Exercise malformed/short frames in the host fixture and observe a
   maintenance session on hardware.
 - Expected: Bad-FCS, failed-status, short, and unrelated ZNP frames cannot
   update information. Maintenance traffic remains opaque, and local diagnostic
   exchanges do not enter the passive persistence path.
+- Evidence: The host observer test rejects bad-FCS, failed-status, short, and
+  unrelated frames. The owner-policy fixture excludes maintenance and local
+  diagnostic traffic from passive observation. An opaque maintenance session
+  remains to be verified on hardware.
 
 ## Host transport state tests
 
@@ -448,30 +470,39 @@ category.
 
 ### DIAG-01 — Idle and normal transport state
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Boot without a TCP client, then connect and disconnect
   Zigbee2MQTT.
 - Expected: Zigbee TCP State reports `idle`, briefly `provisional`, then
   `normal`, and returns to `idle`; Last Event follows the corresponding
   transitions; pending and parked sockets remain off.
+- Evidence: On 2026-08-01, a synthetic ZNP client transitioned through
+  provisional to normal, disconnected cleanly to idle with zero socket count,
+  and repeated the same sequence without rebooting. Repeat with Zigbee2MQTT.
 
 ### DIAG-02 — Pending and parked topology
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: With Zigbee2MQTT normal, open a silent second socket, then promote
   it into a maintenance session.
 - Expected: Pending Socket turns on while waiting, then turns off as Parked
   Socket turns on and State becomes `maintenance`; Socket Connections matches
   the actual active, pending, and parked socket count throughout.
+- Evidence: On 2026-08-01, the pending entity and socket count tracked one
+  additional silent client while a synthetic normal owner remained connected.
+  Parked-socket and maintenance transitions remain to be exercised.
 
 ### DIAG-03 — Rejection, timeout, and maintenance counters
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Cause one third-client rejection, one pending-socket timeout, and
   one successful maintenance takeover.
 - Expected: Rejected Connections, Pending Timeouts, and Maintenance Sessions
   each increment exactly once. Repeating one event changes only its applicable
   boot-scoped counter.
+- Evidence: On 2026-08-01, one third-client rejection and one pending timeout
+  incremented only their respective counters. Maintenance Sessions and Recovery
+  Resets remained unchanged. A successful maintenance takeover remains.
 
 ### DIAG-04 — Recovery reset counter and last event
 
@@ -512,34 +543,46 @@ category.
 
 ### TCP-02 — Normal disconnect and reconnect
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Stop Zigbee2MQTT, wait for disconnect detection, then start it.
 - Expected: UART ownership is released, socket entities return to zero/off, and
   the next client becomes the normal owner without rebooting either chip.
+- Evidence: On 2026-08-01, a synthetic ZNP owner disconnected to idle and zero
+  sockets; its replacement was classified as normal without a reboot. Repeat
+  with Zigbee2MQTT and ordinary radio traffic.
 
 ### TCP-03 — First pending client timeout
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Keep Zigbee2MQTT active, open one additional TCP connection, do
   not send a maintenance command, and wait longer than 30 seconds.
 - Expected: Zigbee2MQTT continues normally; the pending connection is reset at
   timeout; no radio pin is toggled.
+- Evidence: On 2026-08-01, a silent client beside a synthetic normal owner was
+  reset after 30 seconds and Pending Timeouts incremented once. Repeat while
+  observing live Zigbee2MQTT traffic and radio-reset diagnostics.
 
 ### TCP-04 — First-pending policy and third-client rejection
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Keep Zigbee2MQTT active, open a pending connection, then attempt a
   third connection.
 - Expected: The first pending connection is retained and the third is rejected
   immediately; the normal client remains unaffected.
+- Evidence: On 2026-08-01, the first pending client was retained, a third client
+  was rejected, Rejected Connections incremented once, and the synthetic normal
+  owner remained connected. Repeat with Zigbee2MQTT.
 
 ### TCP-05 — Pending disconnect and replacement
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Open and close the first pending connection before timeout, then
   open another candidate.
 - Expected: The slot is released and the replacement becomes the sole pending
   client.
+- Evidence: On 2026-08-01, disconnecting the first pending client released its
+  slot and a replacement occupied the sole pending position. Repeat with
+  Zigbee2MQTT.
 
 ### TCP-06 — Sustained bidirectional traffic
 
@@ -549,6 +592,22 @@ category.
   response latency.
 - Expected: No corruption, unexplained reconnect loop, watchdog reset, or
   growing memory/resource loss.
+
+### TCP-07 — Control-plane socket budget
+
+- Status: `FAIL`
+- Procedure: Keep Home Assistant connected, attach one ESPHome log client, hold
+  one normal and one pending Zigbee TCP socket, then request an entity through
+  the web server and attempt another TCP connection.
+- Expected: The configured socket budget accommodates the listeners, Home
+  Assistant API, one diagnostic API client, normal and pending Zigbee clients,
+  and a transient management request without auxiliary-service accept failures.
+- Evidence: On 2026-08-01, this footprint caused the ESP-IDF HTTP server to log
+  `httpd_accept_conn: error in accept (23)`, and the third-client rejection path
+  could not be exercised reliably. After removing the additional log client,
+  the production-footprint TCP test completed normally, including rejection and
+  timeout counters. Review the socket budget and repeat before closing this
+  test.
 
 ## USB serial transports
 
@@ -1246,10 +1305,14 @@ category.
 
 ### HW-04 — mDNS discovery
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: Discover the `_uzg-01._tcp` service and connect using the advertised
   address/port.
 - Expected: Port, radio type, and baud-rate metadata match the active server.
+- Evidence: On 2026-08-01, mDNS discovered `yzg._uzg-01._tcp.local` at
+  `yzg.local:6638` with `radio_type=znp`, `baud_rate=115200`,
+  `data_flow_control=software`, name `UZG-01`, and version `1.0`, matching the
+  active server configuration.
 
 ### HW-05 — Router factory reset and recommissioning
 
