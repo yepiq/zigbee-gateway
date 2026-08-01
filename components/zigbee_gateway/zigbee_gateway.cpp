@@ -685,19 +685,32 @@ bool ZigbeeGatewayComponent::refresh_metadata_() {
   if (!this->local_uart_access_allowed_("Zigbee information refresh"))
     return false;
 
-  this->mark_running_image_pending_();
+  const std::string previous_role = this->role_;
+  const std::string previous_metadata_status =
+      this->metadata_status_text_sensor_ != nullptr &&
+              this->metadata_status_text_sensor_->has_state()
+          ? this->metadata_status_text_sensor_->state
+          : "Unavailable";
+  const std::string previous_network_status =
+      this->network_information_status_text_sensor_ != nullptr &&
+              this->network_information_status_text_sensor_->has_state()
+          ? this->network_information_status_text_sensor_->state
+          : "Unavailable";
+
   if (this->physical_identity_available_)
     this->physical_identity_candidate_ = this->physical_identity_;
   else
     initialize_physical_identity_cache(
         &this->physical_identity_candidate_, this->physical_identity_.generation + 1);
-  initialize_running_image_cache(
-      &this->running_image_candidate_, this->running_image_.generation);
-  this->running_image_candidate_.awaiting_observation = 1;
+  if (!this->running_image_available_ ||
+      !copy_running_image_for_local_refresh(
+          this->running_image_, &this->running_image_candidate_)) {
+    initialize_running_image_cache(
+        &this->running_image_candidate_, this->running_image_.generation + 1);
+  }
   initialize_network_snapshot_cache(
       &this->network_snapshot_candidate_, this->network_snapshot_.generation + 1);
   this->metadata_capture_active_ = true;
-  this->role_ = "Unknown";
   this->publish_metadata_status_("Refreshing");
 
   const bool identified = this->startup_probe_();
@@ -705,13 +718,12 @@ bool ZigbeeGatewayComponent::refresh_metadata_() {
 
   if (!identified) {
     ESP_LOGW(TAG, "Zigbee information refresh failed; retaining independently cached records.");
+    this->role_ = previous_role;
     this->publish_physical_identity_(this->physical_identity_);
     this->publish_running_image_(this->running_image_);
     this->publish_network_snapshot_(this->network_snapshot_);
-    this->publish_metadata_status_(
-        this->running_image_.known != 0 ? "Awaiting Observation" : "Unavailable");
-    this->publish_network_information_status_(
-        this->network_snapshot_.known != 0 ? "Cached" : "Unavailable");
+    this->publish_metadata_status_(previous_metadata_status.c_str());
+    this->publish_network_information_status_(previous_network_status.c_str());
     return false;
   }
 

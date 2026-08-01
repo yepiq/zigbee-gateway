@@ -47,6 +47,15 @@ int main() {
                  RUNNING_IMAGE_ACTIVE_IEEE | RUNNING_IMAGE_ROLE;
   assert(valid_running_image_cache(image));
 
+  RunningImageCache refresh_candidate{};
+  assert(copy_running_image_for_local_refresh(image, &refresh_candidate));
+  assert(refresh_candidate.generation == image.generation + 1);
+  assert(refresh_candidate.known == image.known);
+  assert(refresh_candidate.awaiting_observation == image.awaiting_observation);
+  assert(std::strcmp(refresh_candidate.firmware, image.firmware) == 0);
+  assert(std::strcmp(refresh_candidate.role, image.role) == 0);
+  assert(!copy_running_image_for_local_refresh(image, nullptr));
+
   assert(record_local_firmware_install(&image, "20250403", "Router"));
   assert(valid_running_image_cache(image));
   assert(image.awaiting_observation == 1);

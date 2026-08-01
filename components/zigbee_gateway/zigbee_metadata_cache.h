@@ -239,5 +239,17 @@ inline bool valid_network_snapshot_cache(const NetworkSnapshotCache &cache) {
          zigbee_cache_text_is_terminated(cache.extended_pan_id);
 }
 
+// A local information refresh is read-only. Build its candidate from the
+// last-known image without changing the authoritative cache; a failed probe can
+// then retain every value and its pending state exactly as it was.
+inline bool copy_running_image_for_local_refresh(
+    const RunningImageCache &current, RunningImageCache *candidate) {
+  if (candidate == nullptr || !valid_running_image_cache(current))
+    return false;
+  *candidate = current;
+  candidate->generation++;
+  return true;
+}
+
 }  // namespace zigbee_gateway
 }  // namespace esphome
