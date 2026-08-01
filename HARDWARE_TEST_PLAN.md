@@ -36,9 +36,6 @@ maintenance window and a recovery method.
 
 ## Next operator-assisted session
 
-- `FW-00` and `FW-12`: reinstall Router `20250403` with permit-join already
-  open; verify the `DOWNLOAD_CRC` writer, 252-byte packets, final ROM check, and
-  application restart without cycling gateway power.
 - `FW-09`: suppress or corrupt the `CMD_RESET` response and verify the physical
   `RESET_N` fallback.
 - `FW-11`: reject unsafe candidate CCFG variants before UART ownership or radio
@@ -928,7 +925,7 @@ category.
 
 ### FW-00 — Router same-image local install
 
-- Status: `PARTIAL PASS`
+- Status: `PASS`
 - Procedure: Install the real-writer ESP32 build, keep Router `20250403`
   selected and its verified staged image intact, then press **Install Zigbee
   Firmware** while capturing logs and HA responsiveness. Keep ESP32 serial
@@ -978,7 +975,17 @@ category.
   then restored all devices. This does not establish that the application
   failed to start: Router firmware is silent on UART, and the result also
   depends on the coordinator's permit-join window and network steering. It
-  remains a required retest with permit-join enabled before installation.
+  motivated the controlled permit-join-before-installation retest below.
+
+  On 2026-08-01, the controlled retest began with the Router alive and
+  permit-join already open. The gateway reused staged Router `20250403` after
+  HTTP 304, verified SHA-256 and candidate CCFG, wrote and ROM-verified all
+  720896 bytes with CRC32 `0x673D9A56`, received the complete reset ACK, and
+  deliberately did not pulse `RESET_N`. UART ownership returned after the
+  500 ms application-settle interval and TCP reopened. Zigbee2MQTT then
+  confirmed that the Router joined automatically without a reset, power cycle,
+  or second commissioning action. Radio work took 26227 ms and the complete
+  operation took 31011 ms.
 
 ### FW-01 — Coordinator upgrade
 
@@ -1120,6 +1127,12 @@ category.
   leading noise. The information-refresh hardware run observed and safely
   skipped one leading `01` before a valid `00 CC` pair.
 
+  The controlled Router reinstall later that day verified the corrected normal
+  path: ROM CRC completed, `CMD_RESET` returned a complete ACK, normal UART
+  baud was restored immediately, and the gateway used only the 500 ms settle
+  interval. No `RESET_N` fallback or power cycle occurred, and the Router
+  automatically rejoined. The deliberately missing-ACK path remains untested.
+
 ### FW-10 — Candidate CCFG preserves remote recovery
 
 - Status: `PARTIAL PASS`
@@ -1133,8 +1146,11 @@ category.
 - Evidence: On 2026-08-01, all three Router and seven Coordinator images in the
   live CC2652P7 catalog were 720896 bytes and independently decoded to
   BL_CONFIG `0xC5FE0FC5`, ERASE_CONF `0xFFFFFFFF`, IMAGE_VALID `0x00000000`,
-  and unprotected flash. Host tests reject each unsafe field independently; an
-  integration run must still prove that rejection precedes UART ownership.
+  and unprotected flash. Host tests reject each unsafe field independently.
+  During the controlled Router reinstall, the production path logged those
+  exact CCFG values before shutting down TCP or entering BSL, then completed
+  the safe image successfully. An injected unsafe candidate is still required
+  to verify the rejection path end to end.
 
 ### FW-11 — Candidate and final-verification failure injection
 
@@ -1149,7 +1165,7 @@ category.
 
 ### FW-12 — TI `DOWNLOAD_CRC` writer
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: Reinstall Router `20250403` from verified staging with permit-join
   already enabled and capture the complete radio task.
 - Expected: `DOWNLOAD_CRC` carries start address zero, size 720896, and staged
@@ -1157,6 +1173,13 @@ category.
   ROM's response to the final block completes verification without a separate
   CRC command. The streaming readback CRC still matches staging, the reset path
   runs, and the Router rejoins without cycling gateway power.
+- Evidence: On 2026-08-01, the development UZG-01 reused staged Router
+  `20250403`, calculated CRC32 `0x673D9A56`, accepted `DOWNLOAD_CRC`, and wrote
+  the complete 720896-byte image in the configured 252-byte transfers. The
+  final block entered the verifying state, the TI ROM accepted the expected
+  CRC, and the local streaming CRC remained identical. The ROM reset ACK was
+  accepted without a GPIO fallback; TCP reopened and the Router automatically
+  rejoined the already-open Zigbee network.
 
 ## Physical controls, discovery, and LEDs
 
