@@ -38,6 +38,7 @@ enum class ZigbeeTcpDisconnectAction : uint8_t {
   NORMAL_ENDED = 0,
   PROMOTE_PENDING = 1,
   FINISH_MAINTENANCE = 2,
+  PROVISIONAL_ENDED = 3,
 };
 
 enum class ZigbeeTcpEvent : uint8_t {
@@ -60,6 +61,7 @@ enum class ZigbeeTcpEvent : uint8_t {
   RECOVERY_RESET = 16,
   SERVER_SHUTDOWN = 17,
   BSL_ENTERED = 18,
+  PROVISIONAL_CLIENT_DISCONNECTED = 19,
 };
 
 struct ZigbeeTcpCounters {
@@ -128,6 +130,8 @@ inline const char *zigbee_tcp_event_name(ZigbeeTcpEvent event) {
       return "Server Shutdown";
     case ZigbeeTcpEvent::BSL_ENTERED:
       return "BSL Entered";
+    case ZigbeeTcpEvent::PROVISIONAL_CLIENT_DISCONNECTED:
+      return "Provisional Client Disconnected";
   }
   return "Unknown";
 }
@@ -274,9 +278,13 @@ class ZigbeeTcpState {
       return {ZigbeeTcpDisconnectAction::PROMOTE_PENDING, false};
     }
 
+    const bool was_provisional = this->active_ == ZigbeeTcpActiveState::PROVISIONAL;
     this->active_ = ZigbeeTcpActiveState::IDLE;
-    this->record_event_(ZigbeeTcpEvent::NORMAL_SESSION_ENDED);
-    return {ZigbeeTcpDisconnectAction::NORMAL_ENDED, false};
+    this->record_event_(was_provisional ? ZigbeeTcpEvent::PROVISIONAL_CLIENT_DISCONNECTED
+                                        : ZigbeeTcpEvent::NORMAL_SESSION_ENDED);
+    return {was_provisional ? ZigbeeTcpDisconnectAction::PROVISIONAL_ENDED
+                            : ZigbeeTcpDisconnectAction::NORMAL_ENDED,
+            false};
   }
 
   void disconnect_pending() {

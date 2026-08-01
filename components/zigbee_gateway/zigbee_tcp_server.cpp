@@ -475,15 +475,18 @@ void ZigbeeTcpServer::apply_maintenance_command_(MaintenanceCommand command) {
 }
 
 void ZigbeeTcpServer::handle_active_disconnect_() {
-  const bool was_normal = this->state_.active() == ZigbeeTcpActiveState::NORMAL;
+  const auto previous_state = this->state_.active();
+  const bool was_normal = previous_state == ZigbeeTcpActiveState::NORMAL;
   const auto result = this->state_.disconnect_active();
   const bool was_maintenance = result.action == ZigbeeTcpDisconnectAction::FINISH_MAINTENANCE;
   const std::string identifier = this->active_.identifier;
   this->close_client_(this->active_, false);
   this->clear_stream_buffers_();
   this->serial_->set_owner(ZigbeeSerialInterface::Owner::NONE);
-  ESP_LOGI(TCP_TAG, "%s client %s disconnected", was_maintenance ? "Maintenance" : "Normal",
-           identifier.c_str());
+  const char *session_name = previous_state == ZigbeeTcpActiveState::MAINTENANCE
+                                 ? "Maintenance"
+                                 : (previous_state == ZigbeeTcpActiveState::NORMAL ? "Normal" : "Provisional");
+  ESP_LOGI(TCP_TAG, "%s client %s disconnected", session_name, identifier.c_str());
 
   if (was_normal && this->parent_ != nullptr)
     this->parent_->on_tcp_normal_session_finished_();

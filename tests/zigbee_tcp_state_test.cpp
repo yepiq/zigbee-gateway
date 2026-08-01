@@ -41,6 +41,20 @@ static void test_normal_and_pending_clients() {
   assert_valid(state);
 }
 
+static void test_silent_provisional_disconnect() {
+  ZigbeeTcpState state;
+  assert(state.accept_client() == ZigbeeTcpAcceptAction::ACTIVATE_PROVISIONAL);
+
+  const auto disconnected = state.disconnect_active();
+  assert(disconnected.action == ZigbeeTcpDisconnectAction::PROVISIONAL_ENDED);
+  assert(!disconnected.recover_radio);
+  assert(state.active() == ZigbeeTcpActiveState::IDLE);
+  assert(state.last_event() == ZigbeeTcpEvent::PROVISIONAL_CLIENT_DISCONNECTED);
+  assert(std::string(zigbee_tcp_event_name(state.last_event())) ==
+         "Provisional Client Disconnected");
+  assert_valid(state);
+}
+
 static void test_connection_first_bsl_takeover() {
   ZigbeeTcpState state;
   assert(state.accept_client() == ZigbeeTcpAcceptAction::ACTIVATE_PROVISIONAL);
@@ -153,6 +167,7 @@ static void test_pending_timeout_and_names() {
 
 int main() {
   test_normal_and_pending_clients();
+  test_silent_provisional_disconnect();
   test_connection_first_bsl_takeover();
   test_legacy_command_first_bsl();
   test_armed_takeover_preserves_normal_until_flashing_socket();
