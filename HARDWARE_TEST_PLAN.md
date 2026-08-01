@@ -66,7 +66,8 @@ maintenance window and a recovery method.
   reported as unknown rather than fabricated. Zigbee Metadata Status accurately
   reports `Restored`, `Refreshing`, `Verified`, `Observed`,
   `Awaiting Observation`, or `Unavailable`. Zigbee Network Information Status
-  accurately reports `Cached`, `Observed`, `Refreshed`, or `Unavailable`.
+  accurately reports `Cached`, `Cleared`, `Observed`, `Refreshed`, or
+  `Unavailable`.
 
 ### BAS-04 — ESP32 OTA update
 
@@ -146,12 +147,20 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
 
 ### CACHE-02 — Clean reboot uses the fast restore path
 
-- Status: `NOT RUN`
+- Status: `PASS`
 - Procedure: After CACHE-01, power-cycle the ESP32 and capture the boot log and
   radio reset/BSL pins if test equipment is available.
 - Expected: Status becomes `Restored`; the saved values publish immediately;
   logs explicitly say the startup probe was skipped; neither reset nor BSL is
   driven for identification.
+- Evidence: On 2026-08-01, the fixed working-tree build restarted through the
+  ESPHome control and reconnected its native API in 177 ms. Metadata Status
+  reported `Restored`; Network Information Status reported `Cached`; the
+  CC2652P7 identity, 720896-byte flash size, factory IEEE, Router role, PAN,
+  channel, parent, and extended PAN ID were restored. TCP returned idle with
+  no sockets, and the observed post-restart logs contained no BSL entry, radio
+  reset, UART timeout, or intrusive metadata refresh. Zigbee2MQTT continued to
+  report the commissioned Router alive with a last-seen age of only seconds.
 
 ### CACHE-03 — Manual refresh while idle
 
@@ -189,12 +198,13 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
 - Status: `NOT RUN`
 - Procedure: Perform any successful remote BSL session, note metadata status
   and logs, close the maintenance connection, and let Zigbee2MQTT reconnect.
-- Expected: The running-image record is committed pending immediately before BSL pin entry;
-  physical identity remains valid and old network values remain `Cached`
-  during maintenance. After the maintenance socket closes, the gateway does
-  not re-enter BSL, scan NV, or delay the returning normal TCP client; running
-  image status remains `Awaiting Observation` until normal ZNP startup traffic
-  identifies it.
+- Expected: The running-image record is committed pending immediately before
+  BSL pin entry; physical identity remains valid and old network details remain
+  `Cached`, but current network membership becomes unavailable during the
+  opaque maintenance session. After the maintenance socket closes, the gateway
+  does not re-enter BSL, scan NV, or delay the returning normal TCP client;
+  running image status remains `Awaiting Observation` until normal ZNP startup
+  traffic identifies it.
 
 ### CACHE-05 — Interrupted maintenance survives an ESP32 reboot
 
@@ -214,8 +224,9 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
   force BSL synchronization to fail, then invoke Refresh Zigbee Information.
 - Expected: Physical identity is never invalidated. The failed candidate never
   replaces the running-image or network records; previous values remain
-  published as last-known, image status is `Awaiting Observation`, and network
-  status remains `Cached`. A later normal client may refresh them passively.
+  published as last-known, image status is `Awaiting Observation`, and current
+  network membership remains unavailable until a later normal client or manual
+  refresh observes it again.
 
 ### CACHE-07 — Manual refresh cannot preempt a TCP client
 
@@ -611,11 +622,11 @@ category.
 
 ## Radio firmware and role changes
 
-### STAGE-01 — Real image staging and simulated radio update
+### STAGE-01 — Historical staging and write-path PoC
 
 - Status: `PASS`
-- Procedure: On the UZG-01, select one compatible image and press **Simulate
-  Zigbee Firmware Update** while capturing logs.
+- Procedure: This test used the former **Simulate Zigbee Firmware Update**
+  development action before the real BSL writer replaced it.
 - Expected: The compatible raw image is downloaded directly into the 768 KiB
   `zigbee_fw` partition, read back with the same SHA-256, and marked ready.
   Simulated erase, write, and verification remain cooperative and consume the
@@ -650,25 +661,24 @@ category.
   as Router / `20250403`, and the catalog continued to expose only Coordinator
   and Router roles.
 
-### STAGE-04 — Update-path responsiveness
+### STAGE-04 — Staging-path responsiveness
 
 - Status: `PASS`
-- Procedure: During staging and every simulated radio phase, repeatedly read
+- Procedure: During staging and every historical simulated radio phase, repeatedly read
   native API entities and capture watchdog/component-blocking warnings.
 - Expected: Home Assistant and logging remain responsive. Work advances in
   bounded chunks without an ESPHome watchdog reset. Repeat this test with
-  stricter timing expectations when simulated UART operations are replaced by
-  slower acknowledged BSL commands.
+  Actual BSL responsiveness is covered separately by FW-00.
 - Evidence: Throughout the 108563 ms simulation on 2026-08-01, HA received
   status and progress updates through every stage and the ESP32 remained
   responsive without a watchdog reset. One isolated API operation took 51 ms;
   no sustained event-loop stall was observed.
 
-### STAGE-05 — Current staged image is reused
+### STAGE-05 — Current staged image was reused by the PoC
 
 - Status: `PASS`
 - Procedure: Complete STAGE-01, keep the same role and version selected, then
-  run the simulation again with normal Internet access.
+  run the former simulation again with normal Internet access.
 - Expected: A conditional HEAD request returns 304. The staged payload is read
   back and its SHA-256 verified before the simulated radio operations start;
   the firmware body is not downloaded again.
@@ -713,7 +723,7 @@ category.
   without it.
 - Expected: Full readback SHA-256 rejects the payload and invalidates its
   header. Online, a fresh download is attempted; offline, the update fails
-  without entering simulated radio erase or write.
+  without entering radio erase or write.
 
 ### CATALOG-01 — Boot refresh precedes the first HA connection
 
@@ -793,14 +803,58 @@ category.
   `Router` and Target Firmware Version as `Select firmware...` while no staged
   image was present.
 
+### FW-00 — Router same-image local install
+
+- Status: `PASS`
+- Procedure: Install the real-writer ESP32 build, keep Router `20250403`
+  selected and its verified staged image intact, then press **Install Zigbee
+  Firmware** while capturing logs and HA responsiveness. Keep ESP32 serial
+  recovery available, but do not interrupt the first run.
+- Expected: The conditional request reuses the staged image, SHA-256 readback
+  succeeds, and the external transport is stopped only immediately before BSL.
+  The writer synchronizes at 500000 baud, bank-erases the CC2652P7, writes all
+  720896 bytes in acknowledged chunks, and accepts only a matching ROM CRC32.
+  The ROM bootloader acknowledges `CMD_RESET`, the gateway holds the UART
+  through the application-startup interval, and normal transport resumes
+  without cycling device power. The selected role/version are retained as
+  locally installed while the remaining mutable metadata awaits observation.
+  Bank erase publishes the network as disconnected and clears the previous
+  PAN/channel/parent snapshot. The Router must be commissioned again. HA,
+  Ethernet, and logging remain responsive during the worker task.
+- Evidence: On 2026-08-01, the first real installation reused the staged Router
+  `20250403` image after HTTP 304 and verified its staged SHA-256. It
+  bank-erased the CC2652P7, wrote all 720896 bytes, and matched ROM CRC32
+  `0x673D9A56`. Radio work took 23782 ms and the complete update took 27850 ms;
+  HA, Ethernet, progress reporting, and TCP recovery remained responsive. The
+  radio did not rejoin after the software reset or commissioning pulse, but a
+  complete PoE power cycle started the image and it rejoined successfully.
+  The tested build exposed two metadata defects: role/version remained unknown
+  and the old cached network membership still appeared connected. Both are
+  corrected in the next build.
+
+  The repeated installation on 2026-08-01 reused the same staged image after a
+  conditional HTTP 304 in 879 ms, matched the staged SHA-256, wrote all 720896
+  bytes, and again matched ROM CRC32 `0x673D9A56`. The ROM `CMD_RESET` was
+  acknowledged, the 50 ms GPIO fallback was not used, normal UART ownership
+  resumed after the 500 ms startup interval, and TCP port 6638 reopened. The
+  complete update took 28667 ms. The gateway published firmware `20250403`,
+  role `Router`, network status Disconnected, and network information status
+  `Cleared`. With permit-join already enabled, Zigbee2MQTT reported a current
+  update from the router without a UZG-01 power cycle. CRC verification still
+  emitted three misleading UART timeout log entries before completing
+  successfully; log cleanup is outstanding and does not affect the verified
+  result.
+
 ### FW-01 — Coordinator upgrade
 
 - Status: `NOT RUN`
 - Procedure: Flash a newer compatible coordinator image and reconnect
   Zigbee2MQTT.
-- Expected: Flash and verification succeed, the existing Zigbee network is
-  preserved when the image/storage format supports it, and diagnostics reflect
-  the new firmware after normal ZNP traffic passively identifies it.
+- Expected: Flash and verification succeed. The current full-bank installer
+  erases the coordinator network state, so the network must be restored from a
+  controller backup or recreated. Diagnostics retain last-known values with
+  awaiting-observation provenance until normal ZNP traffic identifies the new
+  image.
 
 ### FW-02 — Coordinator downgrade
 
@@ -827,6 +881,62 @@ category.
   coordinator configuration/restore; the automatic local identification does
   not retain the old Router role merely because ESPHome did not inspect the
   image stream.
+
+### FW-05 — Failure before bank erase
+
+- Status: `NOT RUN`
+- Procedure: With an instrumented development build, force BSL synchronization
+  to fail before the erase command.
+- Expected: Installation fails with a bounded timeout and a specific status,
+  the radio is reset, its previous image still runs, the staged image remains
+  valid for retry, and the external transport resumes.
+
+### FW-06 — Interrupted write and staged-image recovery
+
+- Status: `NOT RUN`
+- Procedure: After one successful real install, repeat with controlled power
+  loss after bank erase and before CRC verification, then reboot and retry the
+  same target.
+- Expected: The incomplete radio image may not boot, but the ESP32 and verified
+  staging header survive. The next install can re-enter ROM BSL without relying
+  on the radio application, rewrite the complete image, verify CRC32, and
+  recover normal operation.
+
+### FW-07 — Transport ownership during local install
+
+- Status: `NOT RUN`
+- Procedure: Repeat a safe same-image install once with an active TCP client
+  and once in USB Bridged mode. Separately press Install in USB Direct mode.
+- Expected: TCP or USB Bridged is stopped only after staged SHA-256 validation,
+  the local writer remains the sole radio-UART owner, and the prior transport
+  resumes after reset. USB Direct rejects the request before BSL or erase.
+
+### FW-08 — Local and opaque BSL metadata transitions
+
+- Status: `PARTIAL PASS`
+- Procedure: Repeat FW-00 with the corrected build, then enter BSL once through
+  a transparent remote maintenance session without performing a local install.
+- Expected: A confirmed local bank erase publishes Disconnected, clears PAN,
+  channel, parent IEEE, and extended PAN ID, and reports network information as
+  `Cleared`. Successful ROM verification records the selected role and firmware
+  version while stack and active IEEE await observation. An opaque remote BSL
+  session clears image-owned metadata and makes current network membership
+  unavailable while retaining the remaining network fields only as cached
+  history.
+- Evidence: The repeated FW-00 run verified the local half: bank erase cleared
+  PAN, channel, parent IEEE, and extended PAN ID; published Disconnected and
+  `Cleared`; and recorded Router `20250403` with `Awaiting Observation`. The
+  opaque remote-BSL half remains untested.
+
+### FW-09 — Post-flash hardware-reset fallback
+
+- Status: `NOT RUN`
+- Procedure: In an instrumented build, suppress or discard the ROM
+  `CMD_RESET` ACK after a verified same-image write.
+- Expected: The update logs the missing ACK, deasserts BSL, pulses `RESET_N`
+  for 50 ms, waits 500 ms for application startup, and restores normal
+  transport without requiring a device power cycle. The verified installation
+  remains successful and the fallback is distinguishable in production logs.
 
 ## Physical controls, discovery, and LEDs
 
@@ -888,6 +998,26 @@ category.
   pin level.
 - Expected: The component reports that the operation only applies to Router
   firmware, skips it, and does not pulse the configuration pin.
+
+### HW-07 — Router power-cycle and automatic rejoin
+
+- Status: `PASS`
+- Procedure: With the Router commissioned and recently seen by Zigbee2MQTT,
+  power-cycle the complete UZG-01 without invoking factory reset or permit
+  join.
+- Expected: The ESP32 and radio start normally; the Router retains the same
+  IEEE and network association, rejoins automatically, and resumes recent
+  last-seen updates in Zigbee2MQTT. ESPHome restores cached metadata without an
+  intrusive identification pass.
+- Evidence: On 2026-08-01, the complete PoE-powered UZG-01 was power-cycled.
+  ESPHome and Home Assistant reconnected normally. The restored state retained
+  the CC2652P7 identity, Router role, 720896-byte flash size, factory and parent
+  IEEE addresses, PAN ID 28030, and channel 11. Metadata Status reported
+  `Restored`; Network Information Status reported `Cached`; TCP returned idle
+  with no pending or parked socket. Zigbee2MQTT initially retained an old
+  `last_seen` value while the Router was inactive, then immediately reported it
+  `just now` after a TX-power command succeeded, confirming automatic rejoin
+  and bidirectional communication without factory reset or permit join.
 
 ## References
 
