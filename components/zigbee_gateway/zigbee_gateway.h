@@ -88,6 +88,9 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   void set_network_information_status_text_sensor(text_sensor::TextSensor *sensor) {
     this->network_information_status_text_sensor_ = sensor;
   }
+  void set_firmware_manager(ZigbeeFirmwareManager *manager) {
+    this->firmware_manager_ = manager;
+  }
 
   void set_tcp_port(uint16_t port) {
     this->tcp_port_ = port;
@@ -238,6 +241,7 @@ class ZigbeeGatewayComponent : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *factory_ieee_text_sensor_{nullptr};
   text_sensor::TextSensor *self_ieee_text_sensor_{nullptr};
   text_sensor::TextSensor *parent_ieee_text_sensor_{nullptr};
+  ZigbeeFirmwareManager *firmware_manager_{nullptr};
   text_sensor::TextSensor *role_text_sensor_{nullptr};
   text_sensor::TextSensor *ext_pan_id_text_sensor_{nullptr};
   text_sensor::TextSensor *hardware_text_sensor_{nullptr};

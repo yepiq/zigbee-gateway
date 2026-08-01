@@ -1,4 +1,5 @@
 #include "zigbee_firmware_manager.h"
+#include "zigbee_firmware_target.h"
 
 #include "esphome/components/json/json_util.h"
 #include "esphome/components/network/util.h"
@@ -164,6 +165,39 @@ void ZigbeeFirmwareManager::dump_config() {
                 static_cast<unsigned>(MAX_FIRMWARE_IMAGE_SIZE),
                 YESNO(this->cache_valid_), this->cache_blob_.length,
                 static_cast<unsigned>(this->entries_.size()));
+}
+
+void ZigbeeFirmwareManager::set_current_radio_role(const std::string &role) {
+  std::string key;
+  if (strcasecmp(role.c_str(), "Coordinator") == 0)
+    key = "coordinator";
+  else if (strcasecmp(role.c_str(), "Router") == 0)
+    key = "router";
+
+  if (key == this->current_radio_role_)
+    return;
+
+  ESP_LOGD(TAG, "Current radio role changed: %s -> %s",
+           this->current_radio_role_.empty() ? "(unknown)"
+                                             : this->current_radio_role_.c_str(),
+           key.empty() ? "(unknown)" : key.c_str());
+  this->current_radio_role_ = key;
+
+  // Saved user intent (including a migrated staged target) must not be
+  // overwritten by later radio observations. Before setup, retaining the role
+  // is enough; apply_catalog_ will select it once options are available.
+  if (this->target_selection_valid_ || this->entries_.empty() || key.empty() ||
+      std::find(this->role_keys_.begin(), this->role_keys_.end(), key) ==
+          this->role_keys_.end() ||
+      this->active_role_ == key)
+    return;
+
+  this->active_role_ = key;
+  if (this->role_select_ != nullptr)
+    this->role_select_->publish_state(this->role_display_from_key_(key));
+  const bool options_changed = this->rebuild_firmware_options_();
+  if (options_changed && this->firmware_select_ != nullptr)
+    this->schedule_api_reconnect_("current radio role changed");
 }
 
 void ZigbeeFirmwareManager::set_target_role(const std::string &display_role) {
@@ -1482,16 +1516,10 @@ void ZigbeeFirmwareManager::apply_catalog_(std::vector<FirmwareEntry> entries, b
   this->rebuild_role_options_();
 
   set_select_options_(this->role_select_, this->role_options_);
-  if (this->target_selection_valid_ &&
-      std::find(this->role_keys_.begin(), this->role_keys_.end(),
-                this->target_selection_.role) != this->role_keys_.end()) {
-    this->active_role_ = this->target_selection_.role;
-  } else if (std::find(this->role_keys_.begin(), this->role_keys_.end(),
-                       this->active_role_) == this->role_keys_.end()) {
-    auto preferred =
-        std::find(this->role_keys_.begin(), this->role_keys_.end(), this->preferred_role_);
-    this->active_role_ = preferred != this->role_keys_.end() ? *preferred : this->role_keys_.front();
-  }
+  this->active_role_ = select_initial_firmware_role(
+      this->role_keys_,
+      this->target_selection_valid_ ? this->target_selection_.role : "",
+      this->current_radio_role_, this->preferred_role_);
   if (this->role_select_ != nullptr)
     this->role_select_->publish_state(this->role_display_from_key_(this->active_role_));
   this->rebuild_firmware_options_();

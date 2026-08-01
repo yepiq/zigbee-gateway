@@ -41,6 +41,7 @@ class ZigbeeFirmwareManager : public Component {
   void set_startup_timeout(uint32_t value) { this->startup_timeout_ms_ = value; }
   void set_http_timeout(uint32_t value) { this->http_timeout_ms_ = value; }
   void set_max_manifest_size(size_t value) { this->max_manifest_size_ = value; }
+  void set_current_radio_role(const std::string &role);
 
   void set_role_select(select::Select *value) { this->role_select_ = value; }
   void set_firmware_select(select::Select *value) { this->firmware_select_ = value; }
@@ -254,6 +255,7 @@ class ZigbeeFirmwareManager : public Component {
   std::string manifest_url_;
   std::string chip_;
   std::string preferred_role_;
+  std::string current_radio_role_;
   uint32_t startup_timeout_ms_{20000};
   uint32_t http_timeout_ms_{15000};
   size_t max_manifest_size_{65536};

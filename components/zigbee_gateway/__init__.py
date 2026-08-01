@@ -483,6 +483,7 @@ async def to_code(config):
 
         firmware = cg.new_Pvariable(firmware_config[CONF_ID])
         await cg.register_component(firmware, firmware_config)
+        cg.add(var.set_firmware_manager(firmware))
         cg.add(firmware.set_manifest_url(firmware_config[CONF_MANIFEST_URL]))
         cg.add(firmware.set_chip(firmware_config[CONF_CHIP]))
         cg.add(

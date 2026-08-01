@@ -401,6 +401,8 @@ void ZigbeeGatewayComponent::publish_self_ieee_(const char *ieee) {
 
 void ZigbeeGatewayComponent::publish_role_(const char *role) {
   this->role_ = role;
+  if (this->firmware_manager_ != nullptr)
+    this->firmware_manager_->set_current_radio_role(role);
   if (this->role_text_sensor_ != nullptr)
     this->role_text_sensor_->publish_state(role);
   if (!this->metadata_capture_active_)
