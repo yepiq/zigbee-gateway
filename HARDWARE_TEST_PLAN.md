@@ -55,8 +55,6 @@ maintenance window and a recovery method.
   changes, and local-install ownership.
 - `FW-01` through `FW-04`: upgrade/downgrade a Coordinator and repeat both role
   conversions with the relevant controller backup and commissioning window.
-- `HW-05`: perform one Router reset/recommissioning attempt with permit-join
-  enabled before pressing the button.
 - `HW-01` through `HW-03`: observe all three physical LEDs through their TCP,
   USB, and connection-state transitions.
 - Confirm in Zigbee2MQTT that the Router remains live after the non-erasing BSL
@@ -1223,7 +1221,7 @@ category.
 
 ### HW-05 — Router factory reset and recommissioning
 
-- Status: `PARTIAL PASS`
+- Status: `PASS`
 - Procedure: With known compatible router firmware, invoke Factory Reset
   Zigbee Router, enable joining on the coordinator, and recommission the radio.
 - Expected: One 250 ms active-low DIO15 pulse reaches the Router button handler.
@@ -1237,9 +1235,12 @@ category.
   paired successfully, confirmed by the operator.
 
   A later Coordinator-to-Router conversion required a separate radio restart
-  before the second commissioning pulse joined successfully. The revised
-  three-second completion window therefore needs a single-pulse hardware
-  retest with permit-join already enabled.
+  before the second commissioning pulse joined successfully. On 2026-08-01,
+  the revised implementation was retested with permit-join already enabled.
+  The gateway began the operation at 20:04:13.967 and completed its protected
+  reset window at 20:04:17.219. The Router disappeared from the coordinator's
+  active device list, reappeared, completed a new interview, and was confirmed
+  alive without another reset, commissioning pulse, or gateway power cycle.
 
 ### HW-06 — Router factory-reset Coordinator guard
 
