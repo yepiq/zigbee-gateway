@@ -7,6 +7,7 @@ device, software versions, and evidence for every test session.
 
 - `NOT RUN`: implemented but not yet exercised on hardware.
 - `PASS`: observed result matches the expected result.
+- `PARTIAL PASS`: completed evidence passes, but one or more variants remain.
 - `FAIL`: observed result does not match the expected result; retain evidence.
 - `BLOCKED`: the test cannot proceed because a prerequisite is missing.
 - `RETEST`: previously passed, but a later change affects this behavior.
@@ -32,6 +33,37 @@ For firmware and role-changing tests, first save the currently installed radio
 firmware identity and a Zigbee2MQTT coordinator backup. Do not run
 coordinator-to-router tests on the only production coordinator without a
 maintenance window and a recovery method.
+
+## Next operator-assisted session
+
+- `FW-00` and `FW-12`: reinstall Router `20250403` with permit-join already
+  open; verify the `DOWNLOAD_CRC` writer, 252-byte packets, final ROM check, and
+  application restart without cycling gateway power.
+- `FW-09`: suppress or corrupt the `CMD_RESET` response and verify the physical
+  `RESET_N` fallback.
+- `FW-11`: reject unsafe candidate CCFG variants before UART ownership or radio
+  erase, then inject a final CRC mismatch and recover from the staged image.
+- `STAGE-10`: serve one wrong-size but otherwise well-formed image and verify
+  that it is never finalized or allowed to claim the UART.
+- `CACHE-06`: force a read-only refresh failure and confirm the previous
+  metadata remains published and persisted unchanged.
+- `TCP-01` through `TCP-06` and `CACHE-07`: exercise a real Zigbee2MQTT owner,
+  including reconnects, pending sockets, refresh refusal, ordinary traffic, and
+  the long-running stability check.
+- `MNT-01` through `MNT-10`: exercise the legacy ZigStarGW-MT and current XZG-MT
+  command-first/connection-first maintenance workflows against a real normal
+  client.
+- `USB-01` through `USB-09` and `FW-07`: connect the physical USB port and
+  exercise Bridged, Direct, exclusivity, passive observation, BSL/reset baud
+  changes, and local-install ownership.
+- `FW-01` through `FW-04`: upgrade/downgrade a Coordinator and repeat both role
+  conversions with the relevant controller backup and commissioning window.
+- `HW-05`: perform one Router reset/recommissioning attempt with permit-join
+  enabled before pressing the button.
+- `HW-01` through `HW-03`: observe all three physical LEDs through their TCP,
+  USB, and connection-state transitions.
+- Confirm in Zigbee2MQTT that the Router remains live after the non-erasing BSL
+  information refresh performed on 2026-08-01.
 
 ## Baseline and diagnostics
 
@@ -71,12 +103,18 @@ maintenance window and a recovery method.
 
 ### BAS-04 — ESP32 OTA update
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Perform an ESPHome OTA update with Zigbee2MQTT stopped, then repeat
   with it running after the ordinary TCP path has passed.
 - Expected: ESP32 returns cleanly, cached Zigbee information restores without
   toggling the radio pins, and Zigbee2MQTT reconnects without radio network
   loss.
+- Evidence: On 2026-08-01, the final working-tree build uploaded over Ethernet
+  and returned in about four seconds. Ethernet, web server, native API, catalog,
+  staged Router `20250403`, TCP idle state, CC2652P7 identity, Router role, and
+  the cached channel/PAN/parent network snapshot all restored. Startup logs did
+  not show an intrusive BSL probe or radio reset. Repeat while observing a real
+  Zigbee2MQTT session to verify its reconnect and Router liveness.
 
 ### BAS-05 — USB-mode boot does not probe an uncached radio
 
@@ -124,6 +162,11 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
   flash units of 8192 bytes for 720896 bytes total, and selected NV base
   `0xA6000`, size `0x8000`, and page size `0x2000`.
 
+  The TI-reference parser was repeated on the development radio later that day.
+  A 32-bit memory access returned raw little-endian CCFG bytes which decoded to
+  MODE_CONF `0xFFB9C1FF` and BL_CONFIG `0xC5FE0FC5`, confirming bootloader and
+  active-low DIO15 backdoor configuration.
+
 ### GEO-04 — Unknown-family safety
 
 - Status: `NOT RUN`
@@ -167,13 +210,22 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
 - Status: `PASS`
 - Procedure: Stop Zigbee2MQTT and press the Refresh Zigbee Information
   diagnostic button.
-- Expected: The component exclusively claims UART, marks the record dirty,
-  identifies BSL/NV/ZNP information, resets the radio, saves the next clean
-  generation, reports `Verified`, and releases UART for the next TCP client.
+- Expected: The component exclusively claims UART and builds replacement
+  metadata candidates without modifying the authoritative records. It then
+  identifies BSL/NV/ZNP information, resets the radio, atomically saves the
+  successful candidates as the next generation, reports `Verified`, and
+  releases UART for the next TCP client.
 - Evidence: On 2026-08-01, the fixed working-tree build entered BSL, identified
   the CC2652P7 and its NV data, reset the Router, saved physical/image/network
   generation `1/3/3`, published metadata `Verified` and network information
   `Refreshed`, and returned the TCP transport to idle.
+
+  With the later TI-reference changes, the ROM prepended one stray `0x01` byte
+  to the SYNC response. The bounded parser ignored that byte but still required
+  the exact adjacent `00 CC` acknowledgement. Identification then completed in
+  3778 ms, recovered Router role and the complete NV network snapshot, decoded
+  CCFG in little-endian order, reset through the Router settle path, and
+  published metadata `Verified` and network information `Refreshed`.
 
 ### CACHE-10 — Router refresh completes without Coordinator reset wait
 
@@ -219,21 +271,32 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
 
 ### CACHE-06 — Failed refresh retains last-known values
 
-- Status: `NOT RUN`
+- Status: `RETEST`
 - Procedure: With a known clean record and Zigbee2MQTT stopped, temporarily
   force BSL synchronization to fail, then invoke Refresh Zigbee Information.
 - Expected: Physical identity is never invalidated. The failed candidate never
-  replaces the running-image or network records; previous values remain
-  published as last-known, image status is `Awaiting Observation`, and current
-  network membership remains unavailable until a later normal client or manual
-  refresh observes it again.
+  replaces the running-image or network records; previous values and their
+  provenance remain published. Because this local operation is read-only, it
+  does not dirty image identity or network membership merely for entering BSL.
+- Evidence: On 2026-08-01, a deliberately over-strict BSL response reader caused
+  a real refresh failure and exposed that the read-only operation had already
+  cleared the authoritative image/network records. The refresh path now builds
+  candidates without mutating those records; host coverage verifies that the
+  running-image values, generation source, and pending state are preserved. A
+  second instrumented hardware failure is required to verify the corrected
+  publication and persistence behavior.
 
 ### CACHE-07 — Manual refresh cannot preempt a TCP client
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Keep Zigbee2MQTT connected and press Refresh Zigbee Information.
 - Expected: The request is rejected with a clear log message; status and
   metadata do not change; no radio pin toggles and Zigbee2MQTT keeps UART.
+- Evidence: On 2026-08-01, a silent provisional TCP socket was held on the
+  development UZG-01 while the web button was pressed. The gateway logged that
+  the refresh was skipped to preserve UART ownership; the socket remained open
+  and the radio was not probed. Repeat with an active Zigbee2MQTT session and
+  verify its traffic remains uninterrupted.
 
 ### CACHE-08 — Incompatible record is rejected
 
@@ -393,6 +456,24 @@ category.
   effect; no intrusive metadata refresh delays normal UART ownership.
 
 ## Ordinary TCP transport
+
+### TCP-00 — Silent provisional client handling
+
+- Status: `PASS`
+- Procedure: With the server idle, connect and disconnect without sending any
+  bytes. Repeat while holding one silent connection, add a second silent
+  connection, attempt a third, and leave the second open past its timeout.
+- Expected: A no-data client remains provisional and never owns the UART. The
+  first additional socket occupies the sole pending slot, the third is rejected,
+  and the pending socket is reset after 30 seconds. Disconnecting the original
+  socket reports `Provisional Client Disconnected`, not a normal-session event.
+- Evidence: On 2026-08-01, the development UZG-01 accepted one provisional and
+  one pending socket, rejected the third, timed the pending socket out after
+  30000 ms, and incremented only the corresponding rejection and timeout
+  counters. A diagnostic bug that labeled the silent disconnect as a normal
+  session was corrected, covered by the host state-machine test, OTA-installed,
+  and verified live with the corrected event and log message. No TCP payload or
+  radio operation was issued.
 
 ### TCP-01 — Normal Zigbee2MQTT session
 
@@ -622,6 +703,18 @@ category.
 
 ## Radio firmware and role changes
 
+### STAGE-00 — ESP32 staging partition layout
+
+- Status: `PASS`
+- Procedure: Generate and parse the production ESP-IDF partition table for the
+  4 MiB UZG-01 ESP32 target.
+- Expected: Both OTA application slots remain usable and a non-overlapping
+  768 KiB `zigbee_fw` data partition can contain the 4 KiB validity header plus
+  any supported 704 KiB radio image.
+- Evidence: The 2026-08-01 production build generated 1408 KiB `app0` and
+  `app1`, 448 KiB NVS, and `zigbee_fw` at `0x340000` with size `0x0C0000`.
+  The staging partition ends exactly at the 4 MiB flash boundary.
+
 ### STAGE-01 — Historical staging and write-path PoC
 
 - Status: `PASS`
@@ -698,13 +791,19 @@ category.
 
 ### STAGE-07 — Selection changes preserve unrelated staging
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Stage one coordinator image, change the version and role selects
   several times without running an update, then return to the staged selection
   and run it.
 - Expected: Select changes do not erase or invalidate the staged header. The
   original exact role, version, and filename still match and follow the normal
   conditional reuse path.
+- Evidence: On 2026-08-01, the development gateway changed its target from
+  Router to Coordinator and rebuilt the version select with seven Coordinator
+  builds. The staged status remained `router 20250403`. Returning the target to
+  Router restored exact build `CC1352P7_router_20250403.bin` and its three
+  Router options. The final conditional-reuse/install step remains deferred
+  because it would erase the Router's network state.
 
 ### STAGE-08 — Manual staged-image invalidation
 
@@ -725,24 +824,48 @@ category.
   header. Online, a fresh download is attempted; offline, the update fails
   without entering radio erase or write.
 
+### STAGE-10 — Incompatible image size is never finalized
+
+- Status: `PARTIAL PASS`
+- Procedure: Serve an image with valid transfer length, SHA-256 readback, and a
+  syntactically safe final CCFG, but a total size different from the detected
+  radio flash.
+- Expected: The size mismatch is rejected before the staging header is
+  finalized and before UART ownership or radio erase. If an older header claims
+  that payload is valid, it is invalidated and cannot be retried offline.
+- Evidence: On 2026-08-01, the size predicate passed warning-clean host tests
+  for the exact 720896-byte image and rejected zero, mismatched, and unaligned
+  sizes. Code review found and corrected the integration order so this check now
+  precedes both staging-header finalization and UART ownership. A served
+  wrong-size image remains to be exercised end to end.
+
 ### CATALOG-01 — Boot refresh precedes the first HA connection
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Reboot once with a cached catalog and once after clearing stored
   catalog data. Capture logs through the first native API connection.
 - Expected: After the network connects, each boot performs one conditional
   catalog refresh. HA is released immediately after a successful 200/304 result or
   after the configured startup timeout; a missing cache remains unavailable
   if the refresh fails.
+- Evidence: On 2026-08-01, the cached-catalog path restarted safely and Home
+  Assistant reconnected after Ethernet and the startup gate became ready. The
+  device then exposed `Ready; upstream unchanged`, check-failed off, all ten
+  current Zigbee entries, and the restored Router target options. The empty-
+  cache and timeout variants remain to be run.
 
 ### CATALOG-02 — Scheduled and manual catalog checks
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Set the YAML refresh time a few minutes ahead, confirm HA time is
   valid, observe the scheduled check, then press Refresh Firmware Catalog.
 - Expected: Both paths perform one conditional request. An unchanged catalog
   retains the existing selects without forcing an API reconnect; changed
   visible options cause one reconnect after the complete option list is ready.
+- Evidence: On 2026-08-01, the manual path supplied the cached ETag and received
+  HTTP 304 in 600 ms. The normalized catalog and target selects remained active,
+  status returned to `Ready; upstream unchanged`, and no API reconnect occurred.
+  The scheduled-time path and a changed-catalog response remain to be tested.
 
 ### CATALOG-03 — Catalog-check failure diagnostic
 
@@ -805,7 +928,7 @@ category.
 
 ### FW-00 — Router same-image local install
 
-- Status: `PASS`
+- Status: `PARTIAL PASS`
 - Procedure: Install the real-writer ESP32 build, keep Router `20250403`
   selected and its verified staged image intact, then press **Install Zigbee
   Firmware** while capturing logs and HA responsiveness. Keep ESP32 serial
@@ -813,7 +936,8 @@ category.
 - Expected: The conditional request reuses the staged image, SHA-256 readback
   succeeds, and the external transport is stopped only immediately before BSL.
   The writer synchronizes at 500000 baud, bank-erases the CC2652P7, writes all
-  720896 bytes in acknowledged chunks, and accepts only a matching ROM CRC32.
+  720896 bytes in acknowledged 252-byte chunks, and supplies the expected CRC32
+  to `DOWNLOAD_CRC` so the ROM validates it as the final block is committed.
   The ROM bootloader acknowledges `CMD_RESET`, the gateway holds the UART
   through the application-startup interval, and normal transport resumes
   without cycling device power. The selected role/version are retained as
@@ -835,8 +959,9 @@ category.
   The repeated installation on 2026-08-01 reused the same staged image after a
   conditional HTTP 304 in 879 ms, matched the staged SHA-256, wrote all 720896
   bytes, and again matched ROM CRC32 `0x673D9A56`. The ROM `CMD_RESET` was
-  acknowledged, the 50 ms GPIO fallback was not used, normal UART ownership
-  resumed after the 500 ms startup interval, and TCP port 6638 reopened. The
+  acknowledged and the then-experimental build also applied its unconditional
+  50 ms `RESET_N` pulse. Normal UART ownership resumed after the 500 ms startup
+  interval, and TCP port 6638 reopened. The
   complete update took 28667 ms. The gateway published firmware `20250403`,
   role `Router`, network status Disconnected, and network information status
   `Cleared`. With permit-join already enabled, Zigbee2MQTT reported a current
@@ -850,9 +975,10 @@ category.
   was acknowledged, the first installation did not return to the Zigbee
   network after a commissioning pulse. Repeating the same verified install
   started the router without further control input; restarting Zigbee2MQTT
-  then restored all devices. This intermittent startup result requires a
-  physical radio reset after every local installation rather than treating the
-  ROM acknowledgement as proof that the application started.
+  then restored all devices. This does not establish that the application
+  failed to start: Router firmware is silent on UART, and the result also
+  depends on the coordinator's permit-join window and network steering. It
+  remains a required retest with permit-join enabled before installation.
 
 ### FW-01 — Coordinator upgrade
 
@@ -875,12 +1001,22 @@ category.
 
 ### FW-03 — Coordinator-to-router conversion
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: In a controlled maintenance window, flash router firmware and
   commission it into another Zigbee network.
-- Expected: The gateway does not assume the transferred image type; cached role
-  remains last-known during transfer, is replaced only after applicable normal
-  protocol traffic identifies it, and the router factory-reset control works.
+- Expected: Successful ROM verification records the selected Router role and
+  version, clears the former network snapshot, and starts the application. With
+  permit-join already enabled, the freshly erased Router automatically starts
+  network steering; the factory-reset control can restart that process later.
+- Evidence: On 2026-08-01, the development UZG-01 changed from Coordinator
+  `20250321` to Router `20250403`. The 720896-byte download matched staged
+  SHA-256, and bank erase, write, ROM CRC32 `0x673D9A56`, and metadata updates
+  succeeded. A then-experimental unconditional `RESET_N` followed the
+  acknowledged ROM reset. The first commissioning pulse did not produce a
+  join. After a separate radio restart, a second pulse commissioned IEEE
+  `00:12:4B:00:2E:0C:CF:EC`. Conversion and manual commissioning therefore
+  work, but automatic post-flash steering and single-pulse recommissioning need
+  a controlled retest using the TI reset sequence.
 
 ### FW-04 — Router-to-coordinator conversion
 
@@ -928,9 +1064,11 @@ category.
   loss after bank erase and before CRC verification, then reboot and retry the
   same target.
 - Expected: The incomplete radio image may not boot, but the ESP32 and verified
-  staging header survive. The next install can re-enter ROM BSL without relying
-  on the radio application, rewrite the complete image, verify CRC32, and
-  recover normal operation.
+  staging header survive. Bank erase leaves CCFG `IMAGE_VALID` at
+  `0xFFFFFFFF`; TI Boot ROM treats that illegal vector as a reason to enter the
+  serial bootloader. The next install can therefore recover without the radio
+  application, rewrite the complete image, verify CRC32, and resume normal
+  operation.
 
 ### FW-07 — Transport ownership during local install
 
@@ -958,16 +1096,18 @@ category.
   `Cleared`; and recorded Router `20250403` with `Awaiting Observation`. The
   opaque remote-BSL half remains untested.
 
-### FW-09 — Post-flash hardware reset
+### FW-09 — Post-flash reset completion and fallback
 
 - Status: `PARTIAL PASS`
 - Procedure: Install a same-role image and capture the transition from verified
   ROM CRC32 through application startup. Repeat once with the ROM `CMD_RESET`
   acknowledgement suppressed or discarded in an instrumented build.
-- Expected: The update records whether the ROM acknowledged `CMD_RESET`, then
-  deasserts BSL and always pulses `RESET_N` for 50 ms. After the 500 ms
-  application-startup interval, the radio responds normally and transport is
-  restored without a device power cycle in both cases.
+- Expected: A complete `00 CC` response confirms `CMD_RESET`; the gateway then
+  waits for application startup without applying another reset. Leading noise
+  may be skipped only while searching a bounded window for the exact adjacent
+  `00 CC` or `00 33` pair. A NAK, malformed response, or timeout applies a 50 ms
+  `RESET_N` fallback. Normal transport resumes without cycling device power in
+  either case.
 - Evidence: On 2026-08-01, the development UZG-01 reinstalled Coordinator
   `20250321` from verified staging and matched ROM CRC32 `0xA39C59B7`. After the
   ROM acknowledged `CMD_RESET`, the gateway logged the unconditional
@@ -975,7 +1115,48 @@ category.
   500 ms, and reopened TCP without manual intervention or a power cycle. The
   running Coordinator then returned `FE 02 61 01 59 06 3D` to a TCP `SYS_PING`
   request, confirming application startup. The deliberately missing-ACK path
-  remains untested on hardware.
+  remains untested on hardware. Host tests reject a lone `CC`, `12 CC`, and
+  reversed `CC 00`; recognize `00 33` as NAK; and accept `00 CC` after bounded
+  leading noise. The information-refresh hardware run observed and safely
+  skipped one leading `01` before a valid `00 CC` pair.
+
+### FW-10 — Candidate CCFG preserves remote recovery
+
+- Status: `PARTIAL PASS`
+- Procedure: Before radio erase, parse the final 88-byte TI CCFG from the exact
+  staged image and compare it with the configured gateway wiring. Repeat the
+  host validation against every current CC2652P7 Zigbee catalog image.
+- Expected: Installation is rejected unless the image is exactly 720896 bytes,
+  enables the ROM serial bootloader and bank erase, enables the backdoor on
+  active-low DIO15, uses image vector 0, and leaves all customer flash sectors
+  writable. Rejection occurs before the gateway claims or erases the radio.
+- Evidence: On 2026-08-01, all three Router and seven Coordinator images in the
+  live CC2652P7 catalog were 720896 bytes and independently decoded to
+  BL_CONFIG `0xC5FE0FC5`, ERASE_CONF `0xFFFFFFFF`, IMAGE_VALID `0x00000000`,
+  and unprotected flash. Host tests reject each unsafe field independently; an
+  integration run must still prove that rejection precedes UART ownership.
+
+### FW-11 — Candidate and final-verification failure injection
+
+- Status: `NOT RUN`
+- Procedure: In instrumented builds, independently alter each safety-critical
+  CCFG field and then supply a deliberately incorrect expected CRC for an
+  otherwise valid image.
+- Expected: Every unsafe CCFG is rejected before the gateway claims the radio
+  UART or sends bank erase, and the unsafe staged header cannot be reused. A
+  final CRC mismatch is rejected by the ROM at the last `SEND_DATA`; the erased
+  radio remains recoverable by retrying the intact staged image.
+
+### FW-12 — TI `DOWNLOAD_CRC` writer
+
+- Status: `NOT RUN`
+- Procedure: Reinstall Router `20250403` from verified staging with permit-join
+  already enabled and capture the complete radio task.
+- Expected: `DOWNLOAD_CRC` carries start address zero, size 720896, and staged
+  CRC32 `0x673D9A56`. Every ordinary transfer contains 252 firmware bytes; the
+  ROM's response to the final block completes verification without a separate
+  CRC command. The streaming readback CRC still matches staging, the reset path
+  runs, and the Router rejoins without cycling gateway power.
 
 ## Physical controls, discovery, and LEDs
 
@@ -1019,15 +1200,23 @@ category.
 
 ### HW-05 — Router factory reset and recommissioning
 
-- Status: `PASS`
+- Status: `PARTIAL PASS`
 - Procedure: With known compatible router firmware, invoke Factory Reset
   Zigbee Router, enable joining on the coordinator, and recommission the radio.
-- Expected: The router leaves its former network, clears its saved network
-  association, restarts, and enters pairing.
+- Expected: One 250 ms active-low DIO15 pulse reaches the Router button handler.
+  The gateway keeps the operation active while the Router requests leave,
+  waits its firmware-defined two seconds, clears its saved network state,
+  resets, and starts network steering. The operation must not report completion
+  before this sequence has had time to run.
 - Evidence: On 2026-08-01, firmware based on gateway commit `6b35e90` logged
   `Requesting Zigbee router factory reset and pairing mode` at 10:38:13 and
   `Zigbee router factory reset pulse complete` at 10:38:14. The router then
   paired successfully, confirmed by the operator.
+
+  A later Coordinator-to-Router conversion required a separate radio restart
+  before the second commissioning pulse joined successfully. The revised
+  three-second completion window therefore needs a single-pulse hardware
+  retest with permit-join already enabled.
 
 ### HW-06 — Router factory-reset Coordinator guard
 
@@ -1060,6 +1249,11 @@ category.
 
 ## References
 
+- [TI CC2538, CC13xx, and CC26xx Serial Bootloader Interface](https://www.ti.com/lit/an/swra466e/swra466e.pdf)
+- [TI CC2652P7 datasheet](https://www.ti.com/lit/ds/symlink/cc2652p7.pdf)
+- [TI CC13x2/CC26x2 secure-boot behavior](https://www.ti.com/lit/an/swra651/swra651.pdf)
+- [TI CC26x2 system-reset API](https://software-dl.ti.com/simplelink/esd/simplelink_cc13xx_cc26xx_sdk/7.41.00.17/exports/docs/driverlib/cc13x2_cc26x2/driverlib/group__sysctrl__api.html)
+- [Koenkk Router `20250403` application patch](https://github.com/Koenkk/Z-Stack-firmware/blob/Z-Stack_3.x.0_router_20250403/router/Z-Stack_3.x.0/firmware.patch)
 - [UZG-01 LED behavior](https://uzg.zig-star.com/getting-started/#led-behaviour)
 - [XZG LED behavior](https://xzg.xyzroe.cc/hardware/#led-indicators)
 - [XZG CCTools LED1 frames](https://github.com/xyzroe/XZG/blob/e37f4065d016f26a5bb68e07a1dd52ff425466eb/lib/CCTools/src/CCTools.h#L543-L550)
