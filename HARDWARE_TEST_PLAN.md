@@ -42,8 +42,8 @@ maintenance window and a recovery method.
   erase, then inject a final CRC mismatch and recover from the staged image.
 - `STAGE-10`: serve one wrong-size but otherwise well-formed image and verify
   that it is never finalized or allowed to claim the UART.
-- `CACHE-06`: force a read-only refresh failure and confirm the previous
-  metadata remains published and persisted unchanged.
+- `BAS-06`: repeat controlled ESP32 warm restarts while observing PHY link,
+  negotiated speed, and both RJ45 LEDs.
 - `TCP-01` through `TCP-06` and `CACHE-07`: exercise a real Zigbee2MQTT owner,
   including reconnects, pending sockets, refresh refusal, ordinary traffic, and
   the long-running stability check.
@@ -118,6 +118,26 @@ maintenance window and a recovery method.
   USB mode enters BSL, sends a local ZNP request, or consumes USB/radio bytes.
   Metadata Status reports `Unavailable` until an explicit refresh is run in
   idle TCP mode.
+
+### BAS-06 — Ethernet PHY recovery after a warm restart
+
+- Status: `RETEST`
+- Procedure: With the Router commissioned and reachable, record negotiated
+  speed/duplex and both RJ45 LEDs, then perform several controlled ESP32
+  restarts without removing PoE. Confirm Ethernet, web/API access, and the
+  Router after every restart. If the link does not recover, capture logs and
+  restore power once.
+- Expected: GPIO5 resets the LAN8720 on every ESP32 restart; Ethernet returns
+  without removing PoE, while the separately powered Zigbee Router remains on
+  its network. RJ45 LED color is recorded as observed hardware behavior rather
+  than interpreted as an application LED.
+- Evidence: On 2026-08-01, one development OTA restart left the Ethernet link
+  down until PoE was cycled, although the Router remained alive. A later OTA
+  restart recovered Ethernet normally in about two seconds. After recovery,
+  ESPHome reported 100 Mbps full duplex; the Router remained alive, the yellow
+  RJ45 LED blinked with network traffic, and the green RJ45 LED remained dark.
+  This establishes an intermittent warm-restart issue, not a persistent link
+  failure or a Zigbee failure.
 
 ## Chip and storage geometry
 
@@ -270,7 +290,7 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
 
 ### CACHE-06 — Failed refresh retains last-known values
 
-- Status: `RETEST`
+- Status: `PASS`
 - Procedure: With a known clean record and Zigbee2MQTT stopped, temporarily
   force BSL synchronization to fail, then invoke Refresh Zigbee Information.
 - Expected: Physical identity is never invalidated. The failed candidate never
@@ -281,9 +301,17 @@ detection, flash-capacity calculation, or NVOCMP layout selection.
   a real refresh failure and exposed that the read-only operation had already
   cleared the authoritative image/network records. The refresh path now builds
   candidates without mutating those records; host coverage verifies that the
-  running-image values, generation source, and pending state are preserved. A
-  second instrumented hardware failure is required to verify the corrected
-  publication and persistence behavior.
+  running-image values, generation source, and pending state are preserved.
+
+  The corrected build was then tested with BSL synchronization deliberately
+  disabled. After each failed refresh, firmware `20250403`, role `Router`, PAN
+  ID `28030`, channel `11`, parent, and extended PAN remained unchanged;
+  Metadata Status returned to `Restored` and Network Information Status to
+  `Cached`. The Router stayed alive. A reboot and restoration of the normal
+  build preserved the same values and provenance, confirming persistence as
+  well as publication. Two refresh attempts appeared in the captured log even
+  though only one request was intentionally sent; command-source tracing is a
+  separate follow-up and does not alter the cache result.
 
 ### CACHE-07 — Manual refresh cannot preempt a TCP client
 
