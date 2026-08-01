@@ -875,12 +875,33 @@ category.
 
 ### FW-04 — Router-to-coordinator conversion
 
-- Status: `NOT RUN`
+- Status: `PARTIAL PASS`
 - Procedure: Flash a compatible coordinator image back onto the radio.
 - Expected: The radio becomes usable by Zigbee2MQTT after appropriate
   coordinator configuration/restore; the automatic local identification does
   not retain the old Router role merely because ESPHome did not inspect the
   image stream.
+- Evidence: On 2026-08-01, the gateway selected and downloaded Coordinator
+  `20250321`, replacing the staged Router image. The 720896-byte download and
+  staging readback matched SHA-256
+  `ac396e5f554f059704cda3269f43b3da14ee0f63d72dcaece48126de28370694`.
+  Bank erase, write, ROM CRC32 `0xA39C59B7`, and acknowledged `CMD_RESET` all
+  succeeded; the complete conversion took 40055 ms without a device power
+  cycle. A subsequent local refresh independently detected CC2652P7, 720896
+  bytes of flash, the factory IEEE address, NV logical type Coordinator, and
+  not-on-network state through BSL. After `SYS_RESET_IND`, ZNP reported active
+  IEEE `00:12:4B:00:2E:0C:CF:EC`, firmware `20250321`, and stack `2.7.1`.
+  Zigbee2MQTT attachment was deliberately not tested. The refresh also exposed
+  that `UTIL_GET_DEVICE_INFO.DeviceType` is a capability bitmask rather than
+  the configured role; the tested parser overwrote the valid NV-derived
+  Coordinator role with Unknown.
+
+  A corrected ESP32 build was OTA-installed and the refresh repeated. The
+  response reported capabilities `0x07` and state `0x00`; the parser treated
+  that combination as ambiguous, preserved the NV-derived Coordinator role,
+  and published role `Coordinator` with metadata status `Verified`. Firmware
+  `20250321`, stack `2.7.1`, active and factory IEEE addresses, network-off
+  state, hardware, and flash size were also retained correctly.
 
 ### FW-05 — Failure before bank erase
 

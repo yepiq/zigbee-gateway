@@ -24,7 +24,7 @@ struct ZnpObservation {
   uint32_t revision{0};
 
   std::array<uint8_t, 8> active_ieee_lsb{};
-  uint8_t device_type{0};
+  uint8_t device_capabilities{0};
   uint8_t device_state{0};
 
   uint16_t pan_id{0};
@@ -32,6 +32,58 @@ struct ZnpObservation {
   std::array<uint8_t, 8> parent_ieee_lsb{};
   uint8_t channel{0};
 };
+
+enum class ZnpObservedRole : uint8_t {
+  UNKNOWN = 0,
+  COORDINATOR = 1,
+  ROUTER = 2,
+  END_DEVICE = 3,
+};
+
+inline ZnpObservedRole znp_observed_role(uint8_t device_capabilities,
+                                         uint8_t device_state) {
+  // A definitive running state is stronger evidence than the DeviceType
+  // field, which is a capability mask rather than the configured role.
+  switch (device_state) {
+    case 6:
+      return ZnpObservedRole::END_DEVICE;
+    case 7:
+      return ZnpObservedRole::ROUTER;
+    case 8:
+    case 9:
+      return ZnpObservedRole::COORDINATOR;
+    default:
+      break;
+  }
+
+  // A single capability can identify a specialized image. Multi-capability
+  // images such as standard ZNP commonly report 0x07 and remain ambiguous
+  // until NV or a definitive device state identifies their configured role.
+  switch (device_capabilities & 0x07) {
+    case 0x01:
+      return ZnpObservedRole::COORDINATOR;
+    case 0x02:
+      return ZnpObservedRole::ROUTER;
+    case 0x04:
+      return ZnpObservedRole::END_DEVICE;
+    default:
+      return ZnpObservedRole::UNKNOWN;
+  }
+}
+
+inline const char *znp_observed_role_name(ZnpObservedRole role) {
+  switch (role) {
+    case ZnpObservedRole::COORDINATOR:
+      return "Coordinator";
+    case ZnpObservedRole::ROUTER:
+      return "Router";
+    case ZnpObservedRole::END_DEVICE:
+      return "End Device";
+    case ZnpObservedRole::UNKNOWN:
+      return "Unknown";
+  }
+  return "Unknown";
+}
 
 inline bool znp_frame_fcs_valid(uint8_t length, uint8_t cmd0, uint8_t cmd1,
                                 const uint8_t *payload, uint8_t fcs) {
@@ -73,13 +125,13 @@ inline bool decode_znp_observation(uint8_t cmd0, uint8_t cmd1,
   }
 
   // UTIL_GET_DEVICE_INFO SRSP:
-  // status, IEEE_le[8], shortAddr_le16, deviceType, deviceState,
+  // status, IEEE_le[8], shortAddr_le16, deviceTypeCapabilities, deviceState,
   // associatedDeviceCount, associatedDeviceList[].
   if (cmd0 == 0x67 && cmd1 == 0x00 && length >= 14 && payload[0] == 0x00) {
     observation->type = ZnpObservationType::UTIL_DEVICE_INFO;
     for (size_t index = 0; index < observation->active_ieee_lsb.size(); index++)
       observation->active_ieee_lsb[index] = payload[1 + index];
-    observation->device_type = payload[11];
+    observation->device_capabilities = payload[11];
     observation->device_state = payload[12];
     return true;
   }

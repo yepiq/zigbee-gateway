@@ -109,19 +109,6 @@ static void format_extended_pan_decimal_lsb_(const uint8_t extended_pan_lsb[8], 
   }
 }
 
-static const char *znp_device_type_name_(uint8_t device_type) {
-  switch (device_type) {
-    case 0x00:
-      return "Coordinator";
-    case 0x01:
-      return "Router";
-    case 0x02:
-      return "End Device";
-    default:
-      return "Unknown";
-  }
-}
-
 #if defined(USE_WEBSERVER) && defined(USE_NETWORK)
 class GatewayCommandHandler : public web_server_idf::AsyncWebHandler {
  public:
@@ -1341,18 +1328,20 @@ void ZigbeeGatewayComponent::get_device_info_() {
         format_ieee_lsb_(&data[1], ieee);
         this->publish_self_ieee_(ieee);
 
-        const char *role = znp_device_type_name_(data[11]);
-        this->publish_role_(role);
-        ESP_LOGI(TAG, "UTIL_GET_DEVICE_INFO -> IEEE: %s, Role: %s", ieee, role);
+        const ZnpObservedRole observed_role = znp_observed_role(data[11], data[12]);
+        if (observed_role != ZnpObservedRole::UNKNOWN)
+          this->publish_role_(znp_observed_role_name(observed_role));
+        ESP_LOGI(TAG,
+                 "UTIL_GET_DEVICE_INFO -> IEEE: %s, capabilities=0x%02X, state=0x%02X, role=%s",
+                 ieee, data[11], data[12], this->role_.c_str());
       },
       buffer, sizeof(buffer), ZNP_TIMING.start_timeout_ms,
       ZNP_TIMING.byte_timeout_ms, ZNP_TIMING.overall_timeout_ms,
       ZNP_TIMING.retries, ZNP_TIMING.post_send_delay_ms);
 
   if (!ok) {
-    // Do not overwrite an IEEE obtained through BSL.
-    ESP_LOGW(TAG, "UTIL_GET_DEVICE_INFO timed out; preserving the current IEEE address.");
-    this->publish_role_("Unknown");
+    // Preserve independently obtained IEEE and NV logical type.
+    ESP_LOGW(TAG, "UTIL_GET_DEVICE_INFO timed out; preserving current image metadata.");
   }
 }
 
@@ -1898,18 +1887,30 @@ void ZigbeeGatewayComponent::apply_znp_observation_(const ZnpObservation &observ
       prepare_running_image();
       char ieee[24];
       format_ieee_lsb_(observation.active_ieee_lsb.data(), ieee);
-      const char *role = znp_device_type_name_(observation.device_type);
-      const bool changed =
+      const ZnpObservedRole observed_role = znp_observed_role(
+          observation.device_capabilities, observation.device_state);
+      const bool ieee_changed =
           (this->running_image_.known & RUNNING_IMAGE_ACTIVE_IEEE) == 0 ||
-          std::strcmp(this->running_image_.active_ieee, ieee) != 0 ||
-          (this->running_image_.known & RUNNING_IMAGE_ROLE) == 0 ||
-          std::strcmp(this->running_image_.role, role) != 0;
+          std::strcmp(this->running_image_.active_ieee, ieee) != 0;
       copy_zigbee_cache_text(this->running_image_.active_ieee, ieee);
-      copy_zigbee_cache_text(this->running_image_.role, role);
-      this->running_image_.known |= RUNNING_IMAGE_ACTIVE_IEEE | RUNNING_IMAGE_ROLE;
-      ESP_LOGI(TAG, "Passively observed UTIL_GET_DEVICE_INFO -> IEEE=%s role=%s",
-               ieee, role);
-      finish_running_image_update(changed);
+      this->running_image_.known |= RUNNING_IMAGE_ACTIVE_IEEE;
+
+      bool role_changed = false;
+      if (observed_role != ZnpObservedRole::UNKNOWN) {
+        const char *role = znp_observed_role_name(observed_role);
+        role_changed =
+            (this->running_image_.known & RUNNING_IMAGE_ROLE) == 0 ||
+            std::strcmp(this->running_image_.role, role) != 0;
+        copy_zigbee_cache_text(this->running_image_.role, role);
+        this->running_image_.known |= RUNNING_IMAGE_ROLE;
+      }
+      ESP_LOGI(TAG,
+               "Passively observed UTIL_GET_DEVICE_INFO -> IEEE=%s capabilities=0x%02X state=0x%02X role=%s",
+               ieee, observation.device_capabilities, observation.device_state,
+               observed_role != ZnpObservedRole::UNKNOWN
+                   ? znp_observed_role_name(observed_role)
+                   : "preserved");
+      finish_running_image_update(ieee_changed || role_changed);
 
       prepare_network_snapshot();
       const bool on_network = znp_device_state_is_on_network(observation.device_state);

@@ -1,6 +1,7 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 
 #include "components/zigbee_gateway/zigbee_znp_observer.h"
 
@@ -34,17 +35,31 @@ int main() {
       0x00,                                      // status
       0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00,  // IEEE LSB first
       0x00, 0x00,                                // short address
-      0x00,                                      // coordinator
-      0x09,                                      // ZB_COORD
+      0x07,                                      // coordinator/router/end-device capabilities
+      0x00,                                      // DEV_HOLD; role is not active yet
       0x00,                                      // associated device count
   };
   assert(decode_znp_observation(0x67, 0x00, device_info, sizeof(device_info), &observation));
   assert(observation.type == ZnpObservationType::UTIL_DEVICE_INFO);
   assert(observation.active_ieee_lsb[0] == 0x77);
   assert(observation.active_ieee_lsb[7] == 0x00);
-  assert(observation.device_type == 0);
-  assert(observation.device_state == 9);
-  assert(znp_device_state_is_on_network(observation.device_state));
+  assert(observation.device_capabilities == 7);
+  assert(observation.device_state == 0);
+  assert(!znp_device_state_is_on_network(observation.device_state));
+  assert(znp_observed_role(observation.device_capabilities,
+                           observation.device_state) ==
+         ZnpObservedRole::UNKNOWN);
+
+  assert(znp_observed_role(0x07, 0x09) == ZnpObservedRole::COORDINATOR);
+  assert(znp_observed_role(0x07, 0x08) == ZnpObservedRole::COORDINATOR);
+  assert(znp_observed_role(0x07, 0x07) == ZnpObservedRole::ROUTER);
+  assert(znp_observed_role(0x07, 0x06) == ZnpObservedRole::END_DEVICE);
+  assert(znp_observed_role(0x01, 0x00) == ZnpObservedRole::COORDINATOR);
+  assert(znp_observed_role(0x02, 0x00) == ZnpObservedRole::ROUTER);
+  assert(znp_observed_role(0x04, 0x00) == ZnpObservedRole::END_DEVICE);
+  assert(znp_observed_role(0x07, 0x0A) == ZnpObservedRole::UNKNOWN);
+  assert(std::strcmp(znp_observed_role_name(ZnpObservedRole::COORDINATOR),
+                     "Coordinator") == 0);
 
   auto failed_device_info = std::array<uint8_t, sizeof(device_info)>{};
   for (size_t index = 0; index < failed_device_info.size(); index++)
