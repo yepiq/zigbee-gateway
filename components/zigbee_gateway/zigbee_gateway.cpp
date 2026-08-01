@@ -1,5 +1,6 @@
 #include "zigbee_gateway.h"
 #include "zigbee_reset_policy.h"
+#include "zigbee_ti_image.h"
 
 #include <algorithm>
 #include <cmath>
@@ -79,15 +80,13 @@ struct BslTiming {
   uint32_t command_ack_timeout_ms;
   uint32_t header_timeout_ms;
   uint32_t payload_timeout_ms;
-  uint32_t sync_gap_ms;
 };
 
 static constexpr BslTiming BSL_TIMING{
-    50,  // optional 0xCC observation after SYNC
-    50,  // mandatory 0xCC before a command response
+    50,  // complete 0x00 0xCC response after SYNC
+    50,  // complete 0x00 0xCC response before a reply packet
     50,  // [length][checksum] header
     50,  // response payload bytes
-    5,   // gap between the two SYNC bytes
 };
 
 static void format_ieee_lsb_(const uint8_t ieee_lsb[8], char output[24]) {
@@ -753,8 +752,7 @@ bool ZigbeeGatewayComponent::startup_probe_() {
     ESP_LOGW(TAG, "Socket client connected; skipping BSL chip probe to avoid UART contention.");
   } else {
     this->enter_bsl_blocking_();
-    if (!bsl_sync(&this->serial_, BSL_TIMING.sync_ack_timeout_ms,
-                  BSL_TIMING.sync_gap_ms)) {
+    if (!bsl_sync(&this->serial_, BSL_TIMING.sync_ack_timeout_ms)) {
       ESP_LOGW(TAG, "Failed to SYNC with BSL");
     } else {
       ChipInfo chip;
@@ -1387,7 +1385,8 @@ void ZigbeeGatewayComponent::get_firmware_version_() {
 
 bool ZigbeeGatewayComponent::read_memory_word_(uint32_t address, const char *name, uint8_t out[4]) {
   uint8_t length = 0;
-  const bool ok = bsl_mem_read(&this->serial_, address, /* width */ 1, /* count */ 1, out, 4, &length,
+  const bool ok = bsl_mem_read(&this->serial_, address, /* 32-bit access */ 1,
+                               /* count */ 1, out, 4, &length,
                                BSL_TIMING.command_ack_timeout_ms,
                                BSL_TIMING.header_timeout_ms,
                                BSL_TIMING.payload_timeout_ms, 1);
@@ -1556,20 +1555,21 @@ bool ZigbeeGatewayComponent::detect_chip_info_(ChipInfo *chip) {
            (unsigned) (chip->flash_size_bytes / 1024));
   this->publish_flash_size_(chip->flash_size_bytes);
 
-  // CCTools derives MODE_CFG and BSL_CFG from the final 88-byte CCFG area:
+  // TI defines MODE_CONF and BL_CONFIG in the final 88-byte CCFG area:
   //   MODE_CFG = flash_end - 88 + 0x0C
   //   BSL_CFG  = flash_end - 88 + 0x30
   const uint32_t mode_cfg_address = chip->flash_size_bytes - 88 + 0x0C;
   const uint32_t bsl_cfg_address = chip->flash_size_bytes - 88 + 0x30;
   uint8_t mode_raw[4] = {0};
   if (this->read_memory_word_(mode_cfg_address, "MODE_CFG", mode_raw)) {
-    chip->mode_cfg = decode_u32_be(mode_raw);
+    // MEMORY_READ returns raw memory bytes; CCFG registers are little-endian.
+    chip->mode_cfg = zigbee_ti_decode_u32_le(mode_raw);
     ESP_LOGI(TAG, "modeCfg=0x%08X", (unsigned) chip->mode_cfg);
   }
 
   uint8_t bsl_raw[4] = {0};
   if (this->read_memory_word_(bsl_cfg_address, "BSL_CFG", bsl_raw)) {
-    chip->bsl_cfg = decode_u32_be(bsl_raw);
+    chip->bsl_cfg = zigbee_ti_decode_u32_le(bsl_raw);
     ESP_LOGI(TAG, "bslCfg=0x%08X", (unsigned) chip->bsl_cfg);
 
     // If the factory configuration reports IEEE support, read the primary

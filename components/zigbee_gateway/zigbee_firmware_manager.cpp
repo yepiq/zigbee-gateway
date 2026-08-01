@@ -25,7 +25,6 @@ namespace esphome::zigbee_gateway {
 
 static const char *const TAG = "zigbee_firmware";
 static constexpr uint32_t RADIO_BSL_SYNC_ACK_TIMEOUT_MS = 1000;
-static constexpr uint32_t RADIO_BSL_SYNC_GAP_MS = 5;
 static constexpr uint32_t RADIO_BSL_STATUS_ACK_TIMEOUT_MS = 250;
 static constexpr uint32_t RADIO_BSL_HEADER_TIMEOUT_MS = 250;
 static constexpr uint32_t RADIO_BSL_PAYLOAD_TIMEOUT_MS = 250;
@@ -984,8 +983,7 @@ void ZigbeeFirmwareManager::radio_flash_task_() {
 
   auto *serial = this->radio_flash_serial_;
   if (serial == nullptr ||
-      !bsl_sync(serial, RADIO_BSL_SYNC_ACK_TIMEOUT_MS,
-                RADIO_BSL_SYNC_GAP_MS)) {
+      !bsl_sync(serial, RADIO_BSL_SYNC_ACK_TIMEOUT_MS)) {
     finish(RadioFlashError::BSL_SYNC_FAILED, 0, 0);
     return;
   }
@@ -994,6 +992,9 @@ void ZigbeeFirmwareManager::radio_flash_task_() {
                                  std::memory_order_release);
   this->radio_flash_progress_.store(36, std::memory_order_release);
   uint8_t rom_status = 0;
+  // Bank erase also clears CCFG. Until the complete candidate is rewritten,
+  // IMAGE_VALID is erased to 0xFFFFFFFF; TI Boot ROM treats that as an illegal
+  // application vector and remains available through the serial bootloader.
   if (!bsl_bank_erase(serial, RADIO_BSL_ERASE_ACK_TIMEOUT_MS,
                       RADIO_BSL_STATUS_ACK_TIMEOUT_MS,
                       RADIO_BSL_HEADER_TIMEOUT_MS,
