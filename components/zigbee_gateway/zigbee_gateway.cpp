@@ -980,12 +980,12 @@ void ZigbeeGatewayComponent::finish_local_firmware_update(
   this->bsl_pin_->digital_write(false);
   if (bootloader_reset_acknowledged) {
     ESP_LOGI(TAG,
-             "Zigbee ROM reset acknowledged; waiting for the application to start.");
-    this->settle_local_firmware_update_();
-    return;
+             "Zigbee ROM reset acknowledged; restarting the radio through RESET_N.");
+  } else {
+    ESP_LOGW(TAG,
+             "Zigbee ROM reset was not acknowledged; restarting the radio through RESET_N.");
   }
 
-  ESP_LOGW(TAG, "Resetting Zigbee through RESET_N after the ROM reset command failed.");
   this->reset_pin_->digital_write(true);
   this->set_timeout("zigbee_local_flash_reset_release",
                     LOCAL_FLASH_HARD_RESET_PULSE_MS, [this]() {

@@ -845,6 +845,15 @@ category.
   successfully; log cleanup is outstanding and does not affect the verified
   result.
 
+  A production UZG-01 subsequently installed the same Router `20250403` image
+  with matching staged SHA-256 and radio CRC32. Although the ROM reset command
+  was acknowledged, the first installation did not return to the Zigbee
+  network after a commissioning pulse. Repeating the same verified install
+  started the router without further control input; restarting Zigbee2MQTT
+  then restored all devices. This intermittent startup result requires a
+  physical radio reset after every local installation rather than treating the
+  ROM acknowledgement as proof that the application started.
+
 ### FW-01 — Coordinator upgrade
 
 - Status: `NOT RUN`
@@ -949,15 +958,24 @@ category.
   `Cleared`; and recorded Router `20250403` with `Awaiting Observation`. The
   opaque remote-BSL half remains untested.
 
-### FW-09 — Post-flash hardware-reset fallback
+### FW-09 — Post-flash hardware reset
 
-- Status: `NOT RUN`
-- Procedure: In an instrumented build, suppress or discard the ROM
-  `CMD_RESET` ACK after a verified same-image write.
-- Expected: The update logs the missing ACK, deasserts BSL, pulses `RESET_N`
-  for 50 ms, waits 500 ms for application startup, and restores normal
-  transport without requiring a device power cycle. The verified installation
-  remains successful and the fallback is distinguishable in production logs.
+- Status: `PARTIAL PASS`
+- Procedure: Install a same-role image and capture the transition from verified
+  ROM CRC32 through application startup. Repeat once with the ROM `CMD_RESET`
+  acknowledgement suppressed or discarded in an instrumented build.
+- Expected: The update records whether the ROM acknowledged `CMD_RESET`, then
+  deasserts BSL and always pulses `RESET_N` for 50 ms. After the 500 ms
+  application-startup interval, the radio responds normally and transport is
+  restored without a device power cycle in both cases.
+- Evidence: On 2026-08-01, the development UZG-01 reinstalled Coordinator
+  `20250321` from verified staging and matched ROM CRC32 `0xA39C59B7`. After the
+  ROM acknowledged `CMD_RESET`, the gateway logged the unconditional
+  `RESET_N` restart, restored normal UART baud after the 50 ms pulse, waited
+  500 ms, and reopened TCP without manual intervention or a power cycle. The
+  running Coordinator then returned `FE 02 61 01 59 06 3D` to a TCP `SYS_PING`
+  request, confirming application startup. The deliberately missing-ACK path
+  remains untested on hardware.
 
 ## Physical controls, discovery, and LEDs
 
