@@ -7,6 +7,10 @@ substitutions:
   zigbee_gateway_source: components
   zigbee_gateway_refresh: 0s
 
+  # ESP32 host hardware
+  esp32_minimum_chip_revision: '3.1'
+  esp32_sram1_as_iram: 'true'
+
   # TCP serial server
   tcp_serial_port: 6638
   tcp_pending_socket_timeout_ms: 30000
@@ -77,6 +81,9 @@ esp32:
   board: esp32dev
   framework:
     type: esp-idf
+    advanced:
+      minimum_chip_revision: ${esp32_minimum_chip_revision}
+      sram1_as_iram: ${esp32_sram1_as_iram}
     sdkconfig_options:
       CONFIG_FREERTOS_UNICORE: y
       CONFIG_ESP_TASK_WDT_TIMEOUT_S: '10'
