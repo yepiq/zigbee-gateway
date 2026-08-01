@@ -23,6 +23,8 @@ substitutions:
   firmware_catalog_startup_timeout: 20s
   firmware_catalog_http_timeout: 15s
   firmware_catalog_max_manifest_size: 64kB
+  zigbee_bootloader_backdoor_dio: '15'
+  zigbee_bootloader_backdoor_active_high: 'false'
   firmware_catalog_refresh_hour: '4'
   firmware_catalog_refresh_minute: '0'
   firmware_catalog_refresh_days: MON-SUN
@@ -216,6 +218,9 @@ zigbee_gateway:
     startup_timeout: ${firmware_catalog_startup_timeout}
     http_timeout: ${firmware_catalog_http_timeout}
     max_manifest_size: ${firmware_catalog_max_manifest_size}
+    # Candidate images must preserve the UZG-01 radio's remote-update wiring.
+    bootloader_backdoor_dio: ${zigbee_bootloader_backdoor_dio}
+    bootloader_backdoor_active_high: ${zigbee_bootloader_backdoor_active_high}
 
     # Chooses the Zigbee role to install.
     target_firmware_role:

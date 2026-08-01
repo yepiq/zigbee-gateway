@@ -3,6 +3,7 @@
 #include "zigbee_crc32.h"
 #include "zigbee_firmware_target.h"
 #include "zigbee_gateway.h"
+#include "zigbee_ti_image.h"
 
 #include "esphome/components/json/json_util.h"
 #include "esphome/components/network/util.h"
@@ -181,6 +182,7 @@ void ZigbeeFirmwareManager::dump_config() {
                 "  Startup timeout: %" PRIu32 " ms\n"
                 "  HTTP timeout: %" PRIu32 " ms\n"
                 "  Maximum manifest size: %u bytes\n"
+                "  Bootloader backdoor: DIO %u, active %s\n"
                 "  Firmware staging: %s\n"
                 "  Maximum firmware size: %u bytes\n"
                 "  Cache valid: %s\n"
@@ -189,6 +191,8 @@ void ZigbeeFirmwareManager::dump_config() {
                 this->manifest_url_.c_str(), this->chip_.c_str(), this->preferred_role_.c_str(),
                 this->startup_timeout_ms_, this->http_timeout_ms_,
                 static_cast<unsigned>(this->max_manifest_size_),
+                static_cast<unsigned>(this->bootloader_backdoor_dio_),
+                this->bootloader_backdoor_active_high_ ? "high" : "low",
                 this->staging_partition_ == nullptr ? "unavailable" : STAGING_PARTITION_LABEL,
                 static_cast<unsigned>(MAX_FIRMWARE_IMAGE_SIZE),
                 YESNO(this->cache_valid_), this->cache_blob_.length,
@@ -833,6 +837,7 @@ void ZigbeeFirmwareManager::begin_staged_image_check_() {
     return;
   }
   this->staged_image_sha_active_ = true;
+  this->staged_image_crc_ = 0xFFFFFFFFUL;
   this->begin_flash_stage_(FlashState::CHECKING_DOWNLOAD, "Verifying staged firmware");
 }
 
@@ -854,12 +859,18 @@ void ZigbeeFirmwareManager::advance_staged_image_check_() {
       this->handle_staged_image_check_failure_("Staged firmware SHA-256 mismatch");
       return;
     }
+    this->flash_image_crc_ = this->staged_image_crc_ ^ 0xFFFFFFFFUL;
+    if (!this->validate_staged_image_size_())
+      return;
+    if (!this->validate_staged_image_ccfg_())
+      return;
     if (this->finalize_staging_after_check_ && !this->write_staging_header_()) {
       this->fail_firmware_update_("Could not finalize staged firmware");
       return;
     }
-    ESP_LOGD(TAG, "Staged firmware verified from flash: SHA-256=%s",
-             sha256_to_string_(readback_digest).c_str());
+    ESP_LOGD(TAG,
+             "Staged firmware verified from flash: SHA-256=%s, CRC32=0x%08" PRIX32,
+             sha256_to_string_(readback_digest).c_str(), this->flash_image_crc_);
     this->publish_flash_progress_(35);
     this->begin_radio_flash_();
     return;
@@ -880,9 +891,71 @@ void ZigbeeFirmwareManager::advance_staged_image_check_() {
     this->fail_firmware_update_("Could not verify staged firmware");
     return;
   }
+  this->staged_image_crc_ = zigbee_crc32_update(
+      this->staged_image_crc_, this->staging_scratch_, length);
   this->flash_work_offset_ += length;
   this->publish_flash_progress_(
       static_cast<uint8_t>(30 + (this->flash_work_offset_ * 5) / this->flash_image_size_));
+}
+
+bool ZigbeeFirmwareManager::validate_staged_image_size_() {
+  if (this->gateway_ == nullptr) {
+    this->fail_firmware_update_("Zigbee gateway is unavailable");
+    return false;
+  }
+
+  const uint32_t radio_size = this->gateway_->radio_flash_size_bytes();
+  if (radio_size == 0) {
+    this->fail_firmware_update_("Zigbee radio flash size is unavailable");
+    return false;
+  }
+  if (zigbee_ti_image_size_is_compatible(this->flash_image_size_, radio_size))
+    return true;
+
+  ESP_LOGE(TAG, "Firmware image size %u does not match radio flash size %u",
+           static_cast<unsigned>(this->flash_image_size_),
+           static_cast<unsigned>(radio_size));
+  if (this->staged_image_valid_)
+    this->invalidate_staged_firmware_("incompatible image size", false);
+  this->fail_firmware_update_("Firmware image does not match radio flash size");
+  return false;
+}
+
+bool ZigbeeFirmwareManager::validate_staged_image_ccfg_() {
+  uint8_t image_tail[ZIGBEE_TI_CCFG_SIZE]{};
+  if (this->flash_image_size_ < sizeof(image_tail) ||
+      !this->read_staged_bytes_(this->flash_image_size_ - sizeof(image_tail),
+                                image_tail, sizeof(image_tail))) {
+    this->handle_staged_image_check_failure_(
+        "Could not read candidate TI CCFG");
+    return false;
+  }
+
+  ZigbeeTiCcfg ccfg{};
+  const ZigbeeTiCcfgError error = zigbee_ti_validate_ccfg(
+      image_tail, sizeof(image_tail), this->bootloader_backdoor_dio_,
+      this->bootloader_backdoor_active_high_, RADIO_FLASH_START_ADDRESS,
+      &ccfg);
+  ESP_LOGD(TAG,
+           "Candidate TI CCFG: MODE_CONF=0x%08" PRIX32
+           ", BL_CONFIG=0x%08" PRIX32 ", ERASE_CONF=0x%08" PRIX32
+           ", IMAGE_VALID=0x%08" PRIX32,
+           ccfg.mode_conf, ccfg.bl_config, ccfg.erase_conf, ccfg.image_valid);
+  if (error == ZigbeeTiCcfgError::NONE)
+    return true;
+
+  ESP_LOGE(TAG,
+           "Candidate firmware rejected before radio erase: %s "
+           "(configured DIO=%u, active_%s)",
+           zigbee_ti_ccfg_error_name(error),
+           static_cast<unsigned>(this->bootloader_backdoor_dio_),
+           this->bootloader_backdoor_active_high_ ? "high" : "low");
+  if (this->staged_image_valid_)
+    this->invalidate_staged_firmware_("unsafe TI CCFG", false);
+  this->fail_firmware_update_(
+      std::string("Unsafe Zigbee firmware: ") +
+      zigbee_ti_ccfg_error_name(error));
+  return false;
 }
 
 void ZigbeeFirmwareManager::handle_staged_image_check_failure_(const char *reason) {
@@ -911,19 +984,11 @@ void ZigbeeFirmwareManager::begin_flash_stage_(FlashState state, const char *sta
 }
 
 void ZigbeeFirmwareManager::begin_radio_flash_() {
-  if (this->gateway_ == nullptr) {
-    this->fail_firmware_update_("Zigbee gateway is unavailable");
+  // Size and CCFG were validated before a newly downloaded image could be
+  // finalized in staging. Recheck the immutable size here as a defensive
+  // boundary immediately before UART ownership.
+  if (!this->validate_staged_image_size_())
     return;
-  }
-  const uint32_t radio_size = this->gateway_->radio_flash_size_bytes();
-  if (radio_size == 0 || this->flash_image_size_ != radio_size ||
-      (this->flash_image_size_ & 0x03) != 0) {
-    ESP_LOGE(TAG, "Firmware image size %u does not match radio flash size %u",
-             static_cast<unsigned>(this->flash_image_size_),
-             static_cast<unsigned>(radio_size));
-    this->fail_firmware_update_("Firmware image does not match radio flash size");
-    return;
-  }
   if (!this->gateway_->begin_local_firmware_update()) {
     this->fail_firmware_update_("Could not claim the Zigbee radio");
     return;

@@ -89,6 +89,8 @@ CONF_PREFERRED_ROLE = "preferred_role"
 CONF_STARTUP_TIMEOUT = "startup_timeout"
 CONF_HTTP_TIMEOUT = "http_timeout"
 CONF_MAX_MANIFEST_SIZE = "max_manifest_size"
+CONF_BOOTLOADER_BACKDOOR_DIO = "bootloader_backdoor_dio"
+CONF_BOOTLOADER_BACKDOOR_ACTIVE_HIGH = "bootloader_backdoor_active_high"
 CONF_TARGET_FIRMWARE_ROLE = "target_firmware_role"
 CONF_TARGET_FIRMWARE_VERSION = "target_firmware_version"
 CONF_REFRESH_FIRMWARE_CATALOG = "refresh_firmware_catalog"
@@ -165,6 +167,8 @@ FIRMWARE_UPDATE_SCHEMA = cv.Schema(
         cv.Required(CONF_STARTUP_TIMEOUT): cv.positive_time_period_milliseconds,
         cv.Required(CONF_HTTP_TIMEOUT): cv.positive_time_period_milliseconds,
         cv.Required(CONF_MAX_MANIFEST_SIZE): cv.validate_bytes,
+        cv.Required(CONF_BOOTLOADER_BACKDOOR_DIO): cv.int_range(min=0, max=31),
+        cv.Required(CONF_BOOTLOADER_BACKDOOR_ACTIVE_HIGH): cv.boolean,
         cv.Optional(CONF_TARGET_FIRMWARE_ROLE): select.select_schema(
             FirmwareRoleSelect,
             entity_category=ENTITY_CATEGORY_CONFIG,
@@ -505,6 +509,16 @@ async def to_code(config):
         cg.add(
             firmware.set_max_manifest_size(
                 firmware_config[CONF_MAX_MANIFEST_SIZE]
+            )
+        )
+        cg.add(
+            firmware.set_bootloader_backdoor_dio(
+                firmware_config[CONF_BOOTLOADER_BACKDOOR_DIO]
+            )
+        )
+        cg.add(
+            firmware.set_bootloader_backdoor_active_high(
+                firmware_config[CONF_BOOTLOADER_BACKDOOR_ACTIVE_HIGH]
             )
         )
 

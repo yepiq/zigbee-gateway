@@ -44,6 +44,12 @@ class ZigbeeFirmwareManager : public Component {
   void set_startup_timeout(uint32_t value) { this->startup_timeout_ms_ = value; }
   void set_http_timeout(uint32_t value) { this->http_timeout_ms_ = value; }
   void set_max_manifest_size(size_t value) { this->max_manifest_size_ = value; }
+  void set_bootloader_backdoor_dio(uint8_t value) {
+    this->bootloader_backdoor_dio_ = value;
+  }
+  void set_bootloader_backdoor_active_high(bool value) {
+    this->bootloader_backdoor_active_high_ = value;
+  }
   void set_gateway(ZigbeeGatewayComponent *gateway) { this->gateway_ = gateway; }
   void set_current_radio_role(const std::string &role);
 
@@ -262,6 +268,8 @@ class ZigbeeFirmwareManager : public Component {
   void use_staged_firmware_(const char *reason);
   void begin_staged_image_check_();
   void advance_staged_image_check_();
+  bool validate_staged_image_size_();
+  bool validate_staged_image_ccfg_();
   void handle_staged_image_check_failure_(const char *reason);
   void begin_radio_flash_();
   bool start_radio_flash_task_();
@@ -303,6 +311,8 @@ class ZigbeeFirmwareManager : public Component {
   uint32_t startup_timeout_ms_{20000};
   uint32_t http_timeout_ms_{15000};
   size_t max_manifest_size_{65536};
+  uint8_t bootloader_backdoor_dio_{0};
+  bool bootloader_backdoor_active_high_{false};
 
   select::Select *role_select_{nullptr};
   select::Select *firmware_select_{nullptr};
@@ -348,6 +358,7 @@ class ZigbeeFirmwareManager : public Component {
   mbedtls_sha256_context firmware_download_sha_context_{};
   mbedtls_sha256_context staged_image_sha_context_{};
   bool staged_image_sha_active_{false};
+  uint32_t staged_image_crc_{0xFFFFFFFFUL};
   std::atomic<bool> firmware_download_running_{false};
   std::atomic<bool> firmware_download_done_{false};
   std::atomic<DownloadPhase> firmware_download_phase_{DownloadPhase::IDLE};
@@ -365,6 +376,7 @@ class ZigbeeFirmwareManager : public Component {
   size_t flash_work_offset_{0};
   size_t flash_image_size_{0};
   std::array<uint8_t, 32> flash_image_digest_{};
+  uint32_t flash_image_crc_{0};
   uint8_t last_flash_progress_{255};
   uint8_t next_flash_progress_log_{10};
   uint8_t staging_scratch_[STAGING_IO_BLOCK_SIZE]{};

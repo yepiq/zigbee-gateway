@@ -100,7 +100,8 @@ socket and is rejected in both USB modes.
 The optional `firmware_update` block retrieves compatible images from an online
 manifest and provides persistent target selection. Before installation, the
 selected image is downloaded into ESP32 flash and verified by SHA-256. The
-image must exactly match the detected radio flash size.
+image must exactly match the detected radio flash size and retain a usable TI
+ROM bootloader configuration for the device wiring.
 
 Installation takes exclusive ownership from TCP or USB Bridged, writes the
 complete image through the TI ROM bootloader, verifies it with the radio's
@@ -123,6 +124,8 @@ partition in the ESP32 flash. Its entities are independently optional.
 | `startup_timeout` | Yes | — | Maximum wait for the startup catalog check before allowing the native API to connect |
 | `http_timeout` | Yes | — | Timeout for each catalog or firmware HTTP request |
 | `max_manifest_size` | Yes | — | Largest manifest accepted in memory |
+| `bootloader_backdoor_dio` | Yes | — | TI radio DIO driven to request the ROM bootloader |
+| `bootloader_backdoor_active_high` | Yes | — | Active level of that TI radio DIO |
 
 | Entity parameter | Type | Purpose |
 | --- | --- | --- |
