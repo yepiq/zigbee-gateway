@@ -1,6 +1,6 @@
 {
   "name": "YepiqZigbeeGateway",
-  "version": "0.90.0",
+  "version": "2.5.0",
   "description": "Header helpers for the Yepiq Zigbee Gateway ESPHome package.",
   "frameworks": "espidf",
   "platforms": "espressif32",
