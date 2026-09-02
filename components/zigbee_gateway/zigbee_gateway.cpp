@@ -1195,6 +1195,13 @@ void ZigbeeGatewayComponent::request_router_factory_reset_() {
   }
 
   ESP_LOGI(TAG, "Requesting Zigbee router factory reset and pairing mode.");
+  clear_network_snapshot_for_recommissioning(&this->network_snapshot_);
+  this->network_snapshot_available_ = true;
+  this->network_observed_this_boot_ = false;
+  if (!this->save_network_snapshot_cache_())
+    ESP_LOGE(TAG, "Could not persist cleared Zigbee network information.");
+  this->publish_network_snapshot_(this->network_snapshot_);
+  this->publish_network_information_status_("Cleared");
   this->operation_active_ = true;
   this->bsl_pin_->digital_write(true);
   this->set_timeout("zigbee_router_factory_reset_release",

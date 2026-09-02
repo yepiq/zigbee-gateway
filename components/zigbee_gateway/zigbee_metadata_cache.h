@@ -199,6 +199,17 @@ inline bool mark_network_connection_unknown(NetworkSnapshotCache *cache) {
   return true;
 }
 
+/// Factory reset starts network steering and may join a different network.
+/// None of the previous network fields remain authoritative, and successful
+/// recommissioning must not be inferred without a new observation.
+inline bool clear_network_snapshot_for_recommissioning(NetworkSnapshotCache *cache) {
+  if (cache == nullptr)
+    return false;
+  const uint32_t next_generation = cache->generation + 1;
+  initialize_network_snapshot_cache(cache, next_generation);
+  return true;
+}
+
 inline bool record_local_radio_erase(NetworkSnapshotCache *cache) {
   if (cache == nullptr)
     return false;

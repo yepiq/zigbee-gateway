@@ -81,6 +81,20 @@ int main() {
   assert((network.known & NETWORK_SNAPSHOT_PAN_ID) != 0);
   assert(valid_network_snapshot_cache(network));
 
+  network.on_network = 1;
+  network.known |= NETWORK_SNAPSHOT_ON_NETWORK;
+  const uint32_t pre_recommission_generation = network.generation;
+  assert(clear_network_snapshot_for_recommissioning(&network));
+  assert(network.generation == pre_recommission_generation + 1);
+  assert(network.known == 0);
+  assert(network.on_network == 0);
+  assert(network.pan_id == 0);
+  assert(network.channel == 0);
+  assert(network.parent_ieee[0] == '\0');
+  assert(network.extended_pan_id[0] == '\0');
+  assert(valid_network_snapshot_cache(network));
+  assert(!clear_network_snapshot_for_recommissioning(nullptr));
+
   const uint32_t pre_erase_generation = network.generation;
   assert(record_local_radio_erase(&network));
   assert(network.generation == pre_erase_generation + 1);

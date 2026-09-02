@@ -81,6 +81,10 @@ Each optional parameter exposes one information entity:
 | `metadata_status` | Text sensor | Physical/running-image information provenance |
 | `network_information_status` | Text sensor | Network-snapshot provenance |
 
+Factory-resetting a Router clears its previous network snapshot. Joined state
+remains unavailable until a later information refresh or passive observation
+confirms the new network; YZG does not assume that commissioning succeeded.
+
 ## Controls
 
 Each optional parameter exposes one control:
