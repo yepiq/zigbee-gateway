@@ -49,6 +49,9 @@ maintenance window and a recovery method.
   the long-running stability check.
 - `TCP-07`: repeat the control-plane socket-pressure case after adjusting the
   available socket budget.
+- `OBS-05`: capture the Router UART during joining and Zigbee2MQTT interview to
+  determine whether the installed Router firmware exposes a passive exchange
+  that can confirm network state and its Basic-cluster firmware identifier.
 - `MNT-01` through `MNT-10`: exercise the legacy ZigStarGW-MT and current XZG-MT
   command-first/connection-first maintenance workflows against a real normal
   client.
@@ -411,6 +414,18 @@ payload boundaries for `SYS_VERSION`, `UTIL_GET_DEVICE_INFO`,
   unrelated frames. The owner-policy fixture excludes maintenance and local
   diagnostic traffic from passive observation. An opaque maintenance session
   remains to be verified on hardware.
+
+### OBS-05 — Router join and interview observability
+
+- Status: `NOT RUN`
+- Procedure: Capture the radio-facing UART from the start of Router network
+  steering through its Zigbee2MQTT interview, without adding an active serial
+  client or changing the forwarded byte stream.
+- Expected: Determine whether the supported Router firmware emits a stable,
+  parseable exchange that can confirm successful joining and expose the Zigbee
+  Basic-cluster `swBuildId`. If no such exchange reaches the UART, retain
+  unavailable state rather than inferring success and evaluate a firmware- or
+  coordinator-assisted source separately.
 
 ## Host transport state tests
 
@@ -1316,14 +1331,17 @@ category.
 
 ### HW-05 — Router factory reset and recommissioning
 
-- Status: `PASS`
+- Status: `RETEST`
 - Procedure: With known compatible router firmware, invoke Factory Reset
   Zigbee Router, enable joining on the coordinator, and recommission the radio.
 - Expected: One 250 ms active-low DIO15 pulse reaches the Router button handler.
   The gateway keeps the operation active while the Router requests leave,
   waits its firmware-defined two seconds, clears its saved network state,
   resets, and starts network steering. The operation must not report completion
-  before this sequence has had time to run.
+  before this sequence has had time to run. The previous network snapshot is
+  cleared immediately, and Zigbee Network Status remains unavailable rather
+  than claiming `Disconnected` after an unobserved successful join. An explicit
+  information refresh after joining may verify and republish the new network.
 - Evidence: On 2026-08-01, firmware based on gateway commit `6b35e90` logged
   `Requesting Zigbee router factory reset and pairing mode` at 10:38:13 and
   `Zigbee router factory reset pulse complete` at 10:38:14. The router then
@@ -1336,6 +1354,11 @@ category.
   reset window at 20:04:17.219. The Router disappeared from the coordinator's
   active device list, reappeared, completed a new interview, and was confirmed
   alive without another reset, commissioning pulse, or gateway power cycle.
+
+  On 2026-08-02, the operator reported that a recommissioned Router was alive
+  and exposed TX-power control in Zigbee2MQTT while YZG still reported Zigbee
+  Network Status as disconnected. The corrected unavailable-state transition
+  requires hardware retesting.
 
 ### HW-06 — Router factory-reset Coordinator guard
 
