@@ -187,6 +187,11 @@ The [`zigbee_gateway` component reference](components/zigbee_gateway/README.md)
 documents the component parameters and every published entity for users
 building a different ESPHome configuration.
 
+The component reference also tracks
+[potential ESPHome 2026.10 improvements](components/zigbee_gateway/README.md#esphome-202610-improvement-backlog),
+including transport-aware discovery, UART buffer handling, and build/resource
+optimizations, with validation requirements and hardware limits.
+
 Serial logging must remain disabled in customized configurations:
 
 ```yaml

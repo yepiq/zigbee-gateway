@@ -142,3 +142,69 @@ partition in the ESP32 flash. Its entities are independently optional.
 | `firmware_update_status` | Text sensor | Current or final update stage |
 | `firmware_update_progress` | Sensor | Combined download and radio-update progress |
 | `firmware_catalog_check_failed` | Binary sensor | Whether the most recent catalog check failed |
+
+## ESPHome 2026.10 improvement backlog
+
+Reviewed on 2026-10-23 against ESPHome 2026.10.0 and the current UZG-01
+implementation. These are opportunities to evaluate, not implemented gateway
+features or measured performance gains. `esphome config yzg.yaml` passed with
+2026.10.0; this review did not include a firmware build or hardware testing.
+
+### Priority component changes
+
+1. **Make mDNS discovery follow TCP availability.** Use the new ESP32 runtime
+   service enable/disable API to advertise `_uzg-01._tcp` only while the Zigbee
+   TCP listener is available. The current YAML advertises it in USB modes too.
+   Request support through `mdns.request_service_enable_disable()` during code
+   generation, then use `MDNSComponent::set_service_enabled()` once mDNS is
+   ready. Verify discovery after boot in each transport, mode changes, and
+   Ethernet reconnection; keep ESPHome management discovery available.
+2. **Use the ESP-IDF UART input-flush helper.** Evaluate replacing byte-by-byte
+   discard loops in `ZigbeeSerialInterface::drain()` and
+   `ZigbeeUartStreamEndpoint::drain()` with `IDFUARTComponent::flush_input()`.
+   The helper clears both the peek cache and driver RX buffer. Preserve the
+   ownership checks and distinguish RX discard from waiting for TX completion.
+   Retest transport changes, passive observation, BSL entry, and maintenance
+   recovery so stale bytes cannot cross an ownership handoff.
+
+Both APIs are listed in the
+[2026.10 changelog](https://esphome.io/changelog/2026.10.0/).
+Use the [hardware test plan](../../HARDWARE_TEST_PLAN.md), particularly discovery,
+USB serial transports, and maintenance/UART exclusion, to record validation.
+
+### Build and resource opportunities
+
+- **Compressed ESP32 OTA:** automatically negotiated when the uploader and
+  running firmware support it. Upstream reports roughly one-third fewer bytes
+  transferred; measure the benefit on our Ethernet gateway. The first update
+  from older firmware remains uncompressed. This applies to ESPHome host
+  firmware, not the custom TI-radio installer.
+- **RAM and state-publication improvements:** rebuilding picks up upstream
+  changes such as static select options in flash and web-server state events
+  without heap allocation. Compare free heap and responsiveness during catalog
+  refresh, downloads, and diagnostic publication. Runtime firmware-catalog
+  select options still need their dynamic storage; the existing
+  `set_options(FixedVector<...>)` overload remains supported in 2026.10.0.
+- **Faster ESP-IDF builds:** upstream build improvements are automatic.
+  Evaluate `--skip-bootloader` for development builds intended only for OTA;
+  keep full builds for factory/USB installation and release validation.
+- **Flash-vendor selection:** consider `esp32.framework.advanced.flash_chip`
+  after identifying the fitted flash chip and checking supported UZG-01 board
+  revisions. It removes unused vendor drivers; measure actual image/RAM savings
+  rather than applying the advertised ESP32-S3 octal-flash figures to this board.
+
+See the [release overview](https://esphome.io/blog/2026/10/21/esphome-2026-10/)
+and [select API migration notes](https://developers.esphome.io/blog/2026/10/05/select-options-and-light-effects-move-to-constvector/).
+
+### Transport alternatives and hardware limits
+
+- **Native `uart_tcp`:** offers a UART/TCP bridge, connection diagnostics, and
+  IPv4 allowlists. It requires exclusive UART use and serves one TCP connection
+  at a time. Adoption would need to preserve our maintenance rendezvous, parked
+  clients, USB switching, and passive ZNP observation. Retain the current
+  transport state machine for now; evaluate upstream primitives individually.
+  See the [UART TCP documentation](https://esphome.io/components/uart_tcp/).
+- **Native USB bridge and `uart_mux`:** the new CDC-ACM bridge and its mux support
+  ESP32-S2/S3/P4 native USB. They cannot replace the classic ESP32/CH340 path on
+  UZG-01. Revisit for a future board with suitable native USB wiring. See the
+  [CDC-ACM bridge documentation](https://esphome.io/components/bridge/cdc_acm_uart/).
