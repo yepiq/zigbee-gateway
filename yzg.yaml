@@ -84,6 +84,7 @@ esp32:
   framework:
     type: esp-idf
     advanced:
+      flash_chip: generic
       minimum_chip_revision: ${esp32_minimum_chip_revision}
       sram1_as_iram: ${esp32_sram1_as_iram}
     sdkconfig_options:

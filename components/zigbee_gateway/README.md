@@ -146,8 +146,8 @@ partition in the ESP32 flash. Its entities are independently optional.
 ## ESPHome 2026.10 improvement backlog
 
 Reviewed on 2026-10-23 against ESPHome 2026.10.0 and the current UZG-01
-implementation. These are opportunities to evaluate, not implemented gateway
-features or measured performance gains. `esphome config yzg.yaml` passed with
+implementation. Unless marked configured, these are opportunities to evaluate.
+Performance gains remain unmeasured. `esphome config yzg.yaml` passed with
 2026.10.0; this review did not include a firmware build or hardware testing.
 
 ### Priority component changes
@@ -188,10 +188,10 @@ USB serial transports, and maintenance/UART exclusion, to record validation.
 - **Faster ESP-IDF builds:** upstream build improvements are automatic.
   Evaluate `--skip-bootloader` for development builds intended only for OTA;
   keep full builds for factory/USB installation and release validation.
-- **Flash-vendor selection:** consider `esp32.framework.advanced.flash_chip`
-  after identifying the fitted flash chip and checking supported UZG-01 board
-  revisions. It removes unused vendor drivers; measure actual image/RAM savings
-  rather than applying the advertised ESP32-S3 octal-flash figures to this board.
+- **Generic flash driver (configured):** `yzg.yaml` sets
+  `esp32.framework.advanced.flash_chip: generic` to omit vendor-specific flash
+  drivers and reduce IRAM use. Verify boot, OTA, and staging writes on supported
+  UZG-01 board revisions, and measure actual image/RAM savings.
 
 See the [release overview](https://esphome.io/blog/2026/10/21/esphome-2026-10/)
 and [select API migration notes](https://developers.esphome.io/blog/2026/10/05/select-options-and-light-effects-move-to-constvector/).
